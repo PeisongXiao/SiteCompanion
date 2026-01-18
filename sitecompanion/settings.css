@@ -86,6 +86,34 @@ body {
   min-height: 0;
 }
 
+.toc-group {
+  margin: 0;
+}
+
+.toc-group summary {
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink);
+  list-style-position: inside;
+}
+
+.toc-group summary::marker {
+  color: var(--muted);
+}
+
+.toc-group summary:hover {
+  background: var(--card-bg);
+}
+
+.toc-group summary a {
+  display: inline;
+  padding: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
 .toc-resizer {
   position: absolute;
   top: 0;
@@ -112,40 +140,7 @@ body.is-resizing {
 .toc-sub {
   padding-left: 12px !important;
   margin-top: 2px !important;
-  display: none;
-}
-
-.toc-sub.expanded {
-  display: grid !important;
-}
-
-.toc-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.toc-item:hover {
-  background: var(--card-bg);
-}
-
-.toc-item .toc-caret {
-  display: inline-block;
-  width: 10px;
-  text-align: center;
-  color: var(--muted);
-  font-size: 10px;
-  transition: transform 0.15s;
-}
-
-.toc-item.expanded .toc-caret {
-  transform: rotate(90deg);
+  display: grid;
 }
 
 .toc li a {
@@ -159,6 +154,16 @@ body.is-resizing {
 
 .toc li a:hover {
   background: var(--card-bg);
+}
+
+.toc-group summary a {
+  display: inline;
+  padding: 0;
+  background: transparent;
+}
+
+.toc-group summary a:hover {
+  background: transparent;
 }
 
 .toc-sub li a {

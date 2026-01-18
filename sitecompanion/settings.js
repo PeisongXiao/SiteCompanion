@@ -3916,14 +3916,6 @@ function openDetailsChain(target) {
   }
 }
 
-function toggleTocSection(item, sub, force) {
-  if (!sub) return;
-  const shouldExpand =
-    typeof force === "boolean" ? force : !sub.classList.contains("expanded");
-  sub.classList.toggle("expanded", shouldExpand);
-  item.classList.toggle("expanded", shouldExpand);
-}
-
 function updateToc(workspaces, sites) {
   const wsList = document.getElementById("toc-workspaces-list");
   if (!wsList) return;
@@ -3931,21 +3923,15 @@ function updateToc(workspaces, sites) {
   wsList.innerHTML = "";
   for (const ws of workspaces) {
     const li = document.createElement("li");
-    
-    const itemDiv = document.createElement("div");
-    itemDiv.className = "toc-item";
-    
-    const caret = document.createElement("span");
-    caret.className = "toc-caret";
-    caret.textContent = "▸";
-    
+    const details = document.createElement("details");
+    details.className = "toc-group toc-workspace";
+    const summary = document.createElement("summary");
     const a = document.createElement("a");
     a.href = "#";
     a.textContent = ws.name || "Untitled";
-    
-    itemDiv.appendChild(caret);
-    itemDiv.appendChild(a);
-    
+    summary.appendChild(a);
+    details.appendChild(summary);
+
     const subUl = document.createElement("ul");
     subUl.className = "toc-sub";
     
@@ -3985,13 +3971,6 @@ function updateToc(workspaces, sites) {
         subUl.appendChild(subLi);
     }
     
-    itemDiv.addEventListener("click", (e) => {
-      if (e.target.closest("a")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      toggleTocSection(itemDiv, subUl);
-    });
-    
     a.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -4000,11 +3979,11 @@ function updateToc(workspaces, sites) {
         card.scrollIntoView({ behavior: "smooth", block: "start" });
         openDetailsChain(document.getElementById("workspaces-panel"));
       }
-      toggleTocSection(itemDiv, subUl);
+      details.open = true;
     });
 
-    li.appendChild(itemDiv);
-    li.appendChild(subUl);
+    details.appendChild(subUl);
+    li.appendChild(details);
     wsList.appendChild(li);
   }
   
@@ -4032,52 +4011,25 @@ function updateToc(workspaces, sites) {
 }
 
 function initToc() {
-    const items = document.querySelectorAll(".toc-links > ul > li > .toc-item");
-    items.forEach(item => {
-        item.addEventListener("click", (e) => {
-            const sub = item.nextElementSibling;
-            
-            // Handle link click
-            if (e.target.closest("a")) {
-                const link = e.target.closest("a");
-                const href = link.getAttribute("href");
-                if (href && href.startsWith("#")) {
-                    openDetailsChain(document.querySelector(href));
-                    if (sub && sub.classList.contains("toc-sub")) {
-                        toggleTocSection(item, sub);
-                    }
-                }
-                return;
-            }
-
-            // Toggle sub-list on row click (excluding link)
-            if (sub && sub.classList.contains("toc-sub")) {
-              e.preventDefault();
-              e.stopPropagation();
-              toggleTocSection(item, sub);
-            }
-        });
-    });
-
-    const subLinks = document.querySelectorAll(".toc-sub a[href^=\"#\"]");
-    subLinks.forEach((link) => {
-      const href = link.getAttribute("href");
-      if (!href || href === "#") return;
-      link.addEventListener("click", (e) => {
-        const target = document.querySelector(href);
-        if (target) {
-          openDetailsChain(target);
+  const links = document.querySelectorAll(".toc-links a[href^=\"#\"]");
+  links.forEach((link) => {
+    const href = link.getAttribute("href");
+    if (!href || href === "#") return;
+    const isSummaryLink = Boolean(link.closest("summary"));
+    link.addEventListener("click", (e) => {
+      const target = document.querySelector(href);
+      if (target) {
+        openDetailsChain(target);
+        if (!isSummaryLink) {
           target.scrollIntoView({ behavior: "smooth", block: "start" });
         }
-        const sub = link.closest(".toc-sub");
-        const parentItem = sub?.previousElementSibling;
-        if (parentItem?.classList?.contains("toc-item")) {
-          toggleTocSection(parentItem, sub, true);
-        }
+      }
+      if (!isSummaryLink) {
         e.preventDefault();
         e.stopPropagation();
-      });
+      }
     });
+  });
 }
 
 document.addEventListener("DOMContentLoaded", initToc);

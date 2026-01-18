@@ -459,7 +459,12 @@ function createToolbar(shortcuts, position = "bottom-right", themeMode = "light"
         box-shadow: 0 8px 20px ${tokens.glow};
       `;
       btn.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "RUN_SHORTCUT", shortcutId: shortcut.id });
+        chrome.runtime.sendMessage(
+          { type: "RUN_SHORTCUT", shortcutId: shortcut.id },
+          () => {
+            void chrome.runtime.lastError;
+          }
+        );
       });
       toolbar.appendChild(btn);
     }
@@ -570,6 +575,11 @@ const observer = new MutationObserver(() => {
 });
 
 observer.observe(document.documentElement, { childList: true, subtree: true });
+
+chrome.storage.onChanged.addListener(() => {
+  if (suppressObserver) return;
+  scheduleToolbarRefresh();
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== "object") return;

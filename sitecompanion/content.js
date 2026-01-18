@@ -47,12 +47,55 @@ function resolveScopedItems(parentItems, localItems, disabledNames) {
   return [...inherited, ...localEnabled];
 }
 
-function createToolbar(shortcuts, position = "bottom-right") {
+function resolveThemeValue(globalTheme, workspace, site) {
+  const siteTheme = site?.theme;
+  if (siteTheme && siteTheme !== "inherit") return siteTheme;
+  const workspaceTheme = workspace?.theme;
+  if (workspaceTheme && workspaceTheme !== "inherit") return workspaceTheme;
+  return globalTheme || "system";
+}
+
+function resolveThemeMode(theme) {
+  if (theme === "dark" || theme === "light") return theme;
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    return "dark";
+  }
+  return "light";
+}
+
+function getToolbarThemeTokens(mode) {
+  if (mode === "dark") {
+    return {
+      ink: "#abb2bf",
+      muted: "#8b93a5",
+      accent: "#61afef",
+      accentDeep: "#56b6c2",
+      panel: "#2f343f",
+      border: "#3e4451",
+      glow: "rgba(97, 175, 239, 0.2)",
+      shadow: "rgba(0, 0, 0, 0.35)"
+    };
+  }
+  return {
+    ink: "#1f1a17",
+    muted: "#6b5f55",
+    accent: "#b14d2b",
+    accentDeep: "#7d321b",
+    panel: "#fff7ec",
+    border: "#e4d6c5",
+    glow: "rgba(177, 77, 43, 0.18)",
+    shadow: "rgba(122, 80, 47, 0.12)"
+  };
+}
+
+function createToolbar(shortcuts, position = "bottom-right", themeMode = "light") {
   let toolbar = document.getElementById("sitecompanion-toolbar");
   if (toolbar) toolbar.remove();
 
   toolbar = document.createElement("div");
   toolbar.id = "sitecompanion-toolbar";
+
+  const tokens = getToolbarThemeTokens(themeMode);
   
   let posStyle = "";
   switch (position) {
@@ -77,35 +120,38 @@ function createToolbar(shortcuts, position = "bottom-right") {
   toolbar.style.cssText = `
     position: fixed;
     ${posStyle}
-    background: #fff7ec;
-    border: 1px solid #e4d6c5;
+    background: ${tokens.panel};
+    border: 1px solid ${tokens.border};
     border-radius: 12px;
     padding: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    z-index: 999999;
+    box-shadow: 0 12px 30px ${tokens.shadow};
+    z-index: 2147483647;
     display: flex;
     gap: 8px;
-    font-family: system-ui, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: ${tokens.ink};
   `;
 
   if (!shortcuts || !shortcuts.length) {
     const label = document.createElement("span");
     label.textContent = "SiteCompanion";
     label.style.fontSize = "12px";
-    label.style.color = "#6b5f55";
+    label.style.color = tokens.muted;
     toolbar.appendChild(label);
   } else {
     for (const shortcut of shortcuts) {
       const btn = document.createElement("button");
+      btn.type = "button";
       btn.textContent = shortcut.name;
       btn.style.cssText = `
         padding: 6px 12px;
-        background: #b14d2b;
-        color: white;
-        border: none;
-        border-radius: 8px;
+        background: ${tokens.accent};
+        color: #fff9f3;
+        border: 1px solid ${tokens.accent};
+        border-radius: 10px;
         cursor: pointer;
         font-size: 12px;
+        box-shadow: 0 8px 20px ${tokens.glow};
       `;
       btn.addEventListener("click", () => {
         chrome.runtime.sendMessage({ type: "RUN_SHORTCUT", shortcutId: shortcut.id });
@@ -138,24 +184,35 @@ function matchUrl(url, pattern) {
 
 
 
+let suppressObserver = false;
+
 async function refreshToolbar() {
+  suppressObserver = true;
   let {
     sites = [],
     workspaces = [],
     shortcuts = [],
     presets = [],
-    toolbarPosition = "bottom-right"
+    toolbarPosition = "bottom-right",
+    theme = "system"
   } = await chrome.storage.local.get([
     "sites",
     "workspaces",
     "shortcuts",
     "presets",
-    "toolbarPosition"
+    "toolbarPosition",
+    "theme"
   ]);
   const currentUrl = window.location.href;
   const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
   
-  if (site) {
+  try {
+    if (!site) {
+      const toolbar = document.getElementById("sitecompanion-toolbar");
+      if (toolbar) toolbar.remove();
+      return;
+    }
+
     if (!shortcuts.length && Array.isArray(presets) && presets.length) {
       shortcuts = presets;
       await chrome.storage.local.set({ shortcuts });
@@ -181,21 +238,33 @@ async function refreshToolbar() {
         : workspace?.toolbarPosition && workspace.toolbarPosition !== "inherit"
           ? workspace.toolbarPosition
           : toolbarPosition;
-    createToolbar(siteShortcuts, resolvedPosition);
+    const resolvedTheme = resolveThemeValue(theme, workspace, site);
+    const themeMode = resolveThemeMode(resolvedTheme);
+    createToolbar(siteShortcuts, resolvedPosition, themeMode);
+  } finally {
+    window.setTimeout(() => {
+      suppressObserver = false;
+    }, 0);
   }
 }
 
 
 
+let refreshTimer = null;
+function scheduleToolbarRefresh() {
+  if (refreshTimer) return;
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = null;
+    void refreshToolbar();
+  }, 200);
+}
+
 const observer = new MutationObserver(() => {
-
-  // refreshToolbar(); // Debounce this?
-
+  if (suppressObserver) return;
+  scheduleToolbarRefresh();
 });
 
-
-
-// observer.observe(document.documentElement, { childList: true, subtree: true });
+observer.observe(document.documentElement, { childList: true, subtree: true });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== "object") return;

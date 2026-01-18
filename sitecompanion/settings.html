@@ -11,16 +11,12 @@
       <div class="title">SiteCompanion Settings</div>
       <div class="subtitle">Configure workspaces, tasks, and API access</div>
     </header>
-    <div class="page-bar">
-      <div id="status" class="status"></div>
-      <button id="saveBtn" class="accent" type="button">Save Settings</button>
-    </div>
-
     <div class="settings-layout">
       <nav class="toc" aria-label="Settings table of contents">
         <div class="toc-heading">SiteCompanion Settings</div>
         <button id="saveBtnSidebar" class="accent" type="button">Save Settings</button>
         <div id="statusSidebar" class="status"> </div>
+        <div id="sidebarErrors" class="sidebar-errors hidden"></div>
         <div class="toc-title">Sections</div>
         <div class="toc-links">
           <ul>
@@ -53,7 +49,7 @@
             </li>
           </ul>
         </div>
-        <div id="sidebarErrors" class="sidebar-errors hidden"></div>
+        <div id="tocResizer" class="toc-resizer" aria-hidden="true"></div>
       </nav>
       <main class="settings-main">
     <details class="panel" id="global-config-panel" open>

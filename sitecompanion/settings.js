@@ -1,4 +1,3 @@
-const saveBtn = document.getElementById("saveBtn");
 const saveBtnSidebar = document.getElementById("saveBtnSidebar");
 const addApiConfigBtn = document.getElementById("addApiConfigBtn");
 const apiConfigsContainer = document.getElementById("apiConfigs");
@@ -16,13 +15,14 @@ const addSiteBtn = document.getElementById("addSiteBtn");
 const sitesContainer = document.getElementById("sites");
 const addShortcutBtn = document.getElementById("addShortcutBtn");
 const shortcutsContainer = document.getElementById("shortcuts");
-const statusEl = document.getElementById("status");
 const statusSidebarEl = document.getElementById("statusSidebar");
 const sidebarErrorsEl = document.getElementById("sidebarErrors");
 const themeSelect = document.getElementById("themeSelect");
 const toolbarPositionSelect = document.getElementById("toolbarPositionSelect");
 const toolbarAutoHide = document.getElementById("toolbarAutoHide");
 const globalSitesContainer = document.getElementById("globalSites");
+const toc = document.querySelector(".toc");
+const tocResizer = document.getElementById("tocResizer");
 
 const OPENAI_DEFAULTS = {
   apiBaseUrl: "https://api.openai.com/v1",
@@ -32,17 +32,63 @@ const OPENAI_DEFAULTS = {
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_SYSTEM_PROMPT =
   "You are a precise, honest assistant. Be concise and avoid inventing details, be critical about evaluations. You should put in a small summary of all the sections at the end. You should answer in no longer than 3 sections including the summary. And remember to bold or italicize key points.";
+const SIDEBAR_WIDTH_KEY = "sidebarWidth";
+
+function getSidebarWidthLimits() {
+  const min = 160;
+  const max = Math.max(min, Math.min(360, window.innerWidth - 240));
+  return { min, max };
+}
+
+function applySidebarWidth(width) {
+  if (!toc) return;
+  const { min, max } = getSidebarWidthLimits();
+  if (!Number.isFinite(width)) {
+    toc.style.width = "";
+    toc.style.flex = "";
+    return;
+  }
+  const clamped = Math.min(Math.max(width, min), max);
+  toc.style.width = `${clamped}px`;
+  toc.style.flex = `0 0 ${clamped}px`;
+}
+
+function initSidebarResize() {
+  if (!toc || !tocResizer) return;
+  let startX = 0;
+  let startWidth = 0;
+
+  const onMouseMove = (event) => {
+    const delta = event.clientX - startX;
+    applySidebarWidth(startWidth + delta);
+  };
+
+  const onMouseUp = () => {
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+    document.body.classList.remove("is-resizing");
+    const width = toc.getBoundingClientRect().width;
+    void chrome.storage.local.set({ [SIDEBAR_WIDTH_KEY]: Math.round(width) });
+  };
+
+  tocResizer.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    startX = event.clientX;
+    startWidth = toc.getBoundingClientRect().width;
+    document.body.classList.add("is-resizing");
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  });
+}
 
 function getStorage(keys) {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
 }
 
 function setStatus(message) {
-  statusEl.textContent = message;
   if (statusSidebarEl) statusSidebarEl.textContent = message;
   if (!message) return;
   setTimeout(() => {
-    if (statusEl.textContent === message) statusEl.textContent = "";
     if (statusSidebarEl?.textContent === message) statusSidebarEl.textContent = "";
   }, 2000);
 }
@@ -73,7 +119,7 @@ function renderGlobalSitesList(sites) {
   for (const site of globalSites) {
     const link = document.createElement("a");
     link.href = "#";
-    link.textContent = site.urlPattern || "Untitled Site";
+    link.textContent = site.name || site.urlPattern || "Untitled Site";
     link.addEventListener("click", (e) => {
       e.preventDefault();
       const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
@@ -1863,7 +1909,13 @@ function buildScopedModuleSection({
     const newItem = newItemFactory(localContainer);
     const options =
       typeof cardOptions === "function" ? cardOptions() : cardOptions;
-    localContainer.appendChild(buildCard(newItem, localContainer, options));
+    const newCard = buildCard(newItem, localContainer, options);
+    const first = localContainer.firstElementChild;
+    if (first) {
+      localContainer.insertBefore(newCard, first);
+    } else {
+      localContainer.appendChild(newCard);
+    }
     if (module === "envs") {
       updateEnvApiOptions();
     } else if (module === "profiles") {
@@ -1933,7 +1985,10 @@ function listWorkspaceTargets() {
 function listSiteTargets() {
   return [...sitesContainer.querySelectorAll(".site-card")].map((card) => ({
     id: card.dataset.id || "",
-    name: card.querySelector(".site-pattern")?.value || "Untitled Site"
+    name:
+      card.querySelector(".site-name")?.value ||
+      card.querySelector(".site-pattern")?.value ||
+      "Untitled Site"
   }));
 }
 
@@ -2214,6 +2269,7 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
 
   const header = document.createElement("div");
   header.className = "row workspace-header";
+  header.style.alignItems = "flex-end";
 
   const nameField = document.createElement("div");
   nameField.className = "field";
@@ -2387,7 +2443,7 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     for (const site of ownedSites) {
       const link = document.createElement("a");
       link.href = "#";
-      link.textContent = site.urlPattern || "Untitled Site";
+      link.textContent = site.name || site.urlPattern || "Untitled Site";
       link.addEventListener("click", (e) => {
         e.preventDefault();
         const siteCard = document.querySelector(
@@ -2411,6 +2467,7 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
 function collectSites() {
   const cards = [...sitesContainer.querySelectorAll(".site-card")];
   return cards.map((card) => {
+    const nameInput = card.querySelector(".site-name");
     const patternInput = card.querySelector(".site-pattern");
     const workspaceSelect = card.querySelector(".site-workspace");
     const themeSelect = card.querySelector(".appearance-theme");
@@ -2426,6 +2483,7 @@ function collectSites() {
     const apiConfigsInherited = card.querySelector('.inherited-list[data-module="apiConfigs"]');
     return {
       id: card.dataset.id || newSiteId(),
+      name: (nameInput?.value || "").trim(),
       urlPattern: (patternInput?.value || "").trim(),
       workspaceId: workspaceSelect?.value || "global",
       theme: themeSelect?.value || "inherit",
@@ -2451,8 +2509,25 @@ function buildSiteCard(site, allWorkspaces = []) {
   card.dataset.id = site.id || newSiteId();
 
   const row = document.createElement("div");
-  row.className = "row";
+  row.className = "row site-header";
   row.style.alignItems = "flex-end";
+
+  const nameField = document.createElement("div");
+  nameField.className = "field";
+  nameField.style.flex = "0.6";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Site name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = site.name || "";
+  nameInput.className = "site-name";
+  nameInput.placeholder = "Site Name";
+  nameInput.addEventListener("input", () => {
+    updateToc(collectWorkspaces(), collectSites());
+    scheduleSidebarErrors();
+  });
+  nameField.appendChild(nameLabel);
+  nameField.appendChild(nameInput);
 
   const patternField = document.createElement("div");
   patternField.className = "field";
@@ -2519,6 +2594,7 @@ function buildSiteCard(site, allWorkspaces = []) {
     scheduleSidebarErrors();
   });
 
+  row.appendChild(nameField);
   row.appendChild(patternField);
   row.appendChild(wsField);
   row.appendChild(deleteBtn);
@@ -2924,11 +3000,13 @@ function buildShortcutCard(shortcut, _container, options = {}) {
   taskField.appendChild(taskLabel);
   taskField.appendChild(taskSelect);
 
+  const actions = document.createElement("div");
+  actions.className = "shortcut-actions";
+
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "ghost delete";
   deleteBtn.textContent = "Delete";
-  deleteBtn.style.marginTop = "8px";
   deleteBtn.addEventListener("click", () => {
     card.remove();
     scheduleSidebarErrors();
@@ -2939,7 +3017,7 @@ function buildShortcutCard(shortcut, _container, options = {}) {
   card.appendChild(envField);
   card.appendChild(profileField);
   card.appendChild(taskField);
-  card.appendChild(
+  actions.appendChild(
     buildDuplicateControls("shortcuts", () => ({
       id: card.dataset.id,
       name: nameInput.value || "Untitled Shortcut",
@@ -2949,7 +3027,8 @@ function buildShortcutCard(shortcut, _container, options = {}) {
       enabled: enabledInput.checked
     }))
   );
-  card.appendChild(deleteBtn);
+  actions.appendChild(deleteBtn);
+  card.appendChild(actions);
 
   return card;
 }
@@ -3071,7 +3150,10 @@ function updateSidebarErrors() {
 
   const siteCards = [...sitesContainer.querySelectorAll(".site-card")];
   siteCards.forEach((card) => {
-    const label = card.querySelector(".site-pattern")?.value || "Site";
+    const label =
+      card.querySelector(".site-name")?.value ||
+      card.querySelector(".site-pattern")?.value ||
+      "Site";
     checkNameInputs(
       card.querySelector(".site-envs"),
       ".env-config-name",
@@ -3093,6 +3175,8 @@ function updateSidebarErrors() {
       `${label} shortcuts`
     );
   });
+
+  checkNameInputs(sitesContainer, ".site-name", "Sites");
 
   if (!enabledTasks.length) errors.push("No tasks enabled.");
   if (!enabledEnvs.length) errors.push("No environments enabled.");
@@ -3206,7 +3290,8 @@ async function loadSettings() {
     workspaces = [],
     sites = [],
     toolbarPosition = "bottom-right",
-    toolbarAutoHide: storedToolbarAutoHide = true
+    toolbarAutoHide: storedToolbarAutoHide = true,
+    sidebarWidth
   } = await getStorage([
     "apiKey",
     "apiKeys",
@@ -3229,7 +3314,8 @@ async function loadSettings() {
     "workspaces",
     "sites",
     "toolbarPosition",
-    "toolbarAutoHide"
+    "toolbarAutoHide",
+    SIDEBAR_WIDTH_KEY
   ]);
 
   themeSelect.value = theme;
@@ -3240,6 +3326,9 @@ async function loadSettings() {
   }
   if (toolbarAutoHide) {
     toolbarAutoHide.checked = Boolean(storedToolbarAutoHide);
+  }
+  if (Number.isFinite(sidebarWidth)) {
+    applySidebarWidth(sidebarWidth);
   }
 
   if (!shortcuts.length && Array.isArray(legacyPresets) && legacyPresets.length) {
@@ -3287,6 +3376,7 @@ async function loadSettings() {
       if (!site || typeof site !== "object") return site;
       return {
         ...site,
+        name: site.name || site.urlPattern || "",
         workspaceId: site.workspaceId || "global",
         theme: site.theme || "inherit",
         toolbarPosition: site.toolbarPosition || "inherit",
@@ -3638,7 +3728,6 @@ async function saveSettings() {
   }
 }
 
-saveBtn.addEventListener("click", () => void saveSettings());
 if (saveBtnSidebar) {
   saveBtnSidebar.addEventListener("click", () => void saveSettings());
 }
@@ -3759,7 +3848,12 @@ addWorkspaceBtn.addEventListener("click", () => {
     shortcuts: [],
     disabledInherited: normalizeDisabledInherited()
   }, collectWorkspaces(), collectSites());
-  workspacesContainer.appendChild(newCard);
+  const first = workspacesContainer.firstElementChild;
+  if (first) {
+    workspacesContainer.insertBefore(newCard, first);
+  } else {
+    workspacesContainer.appendChild(newCard);
+  }
   refreshWorkspaceInheritedLists();
   scheduleSidebarErrors();
   updateToc(collectWorkspaces(), collectSites());
@@ -3768,6 +3862,7 @@ addWorkspaceBtn.addEventListener("click", () => {
 addSiteBtn.addEventListener("click", () => {
   const newCard = buildSiteCard({
     id: newSiteId(),
+    name: "",
     urlPattern: "",
     workspaceId: "global",
     theme: "inherit",
@@ -3778,7 +3873,12 @@ addSiteBtn.addEventListener("click", () => {
     shortcuts: [],
     disabledInherited: normalizeDisabledInherited()
   }, collectWorkspaces());
-  sitesContainer.appendChild(newCard);
+  const first = sitesContainer.firstElementChild;
+  if (first) {
+    sitesContainer.insertBefore(newCard, first);
+  } else {
+    sitesContainer.appendChild(newCard);
+  }
   refreshSiteInheritedLists();
   scheduleSidebarErrors();
   updateToc(collectWorkspaces(), collectSites());
@@ -3792,11 +3892,17 @@ addShortcutBtn.addEventListener("click", () => {
     profileId: "",
     taskId: ""
   });
-  shortcutsContainer.appendChild(newCard);
+  const first = shortcutsContainer.firstElementChild;
+  if (first) {
+    shortcutsContainer.insertBefore(newCard, first);
+  } else {
+    shortcutsContainer.appendChild(newCard);
+  }
   scheduleSidebarErrors();
 });
 
 themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
+initSidebarResize();
 
 loadSettings();
 
@@ -3908,7 +4014,7 @@ function updateToc(workspaces, sites) {
     for (const site of sites) {
         const li = document.createElement("li");
         const a = document.createElement("a");
-        a.textContent = site.urlPattern || "Untitled Site";
+        a.textContent = site.name || site.urlPattern || "Untitled Site";
         a.href = "#";
         a.addEventListener("click", (e) => {
             e.preventDefault();

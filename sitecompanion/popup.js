@@ -18,6 +18,7 @@ const SHORTCUT_RUN_KEY = "runShortcutId";
 const LAST_TASK_KEY = "lastSelectedTaskId";
 const LAST_ENV_KEY = "lastSelectedEnvId";
 const LAST_PROFILE_KEY = "lastSelectedProfileId";
+const POPUP_DRAFT_KEY = "popupDraft";
 
 const unknownSiteState = document.getElementById("unknownSiteState");
 const extractionReviewState = document.getElementById("extractionReviewState");
@@ -25,6 +26,7 @@ const normalExecutionState = document.getElementById("normalExecutionState");
 const partialTextPaste = document.getElementById("partialTextPaste");
 const extractFullBtn = document.getElementById("extractFullBtn");
 const extractedPreview = document.getElementById("extractedPreview");
+const siteNameInput = document.getElementById("siteNameInput");
 const urlPatternInput = document.getElementById("urlPatternInput");
 const retryExtractBtn = document.getElementById("retryExtractBtn");
 const confirmSiteBtn = document.getElementById("confirmSiteBtn");
@@ -44,6 +46,9 @@ const state = {
   outputRaw: "",
   autoRunPending: false,
   shortcutRunPending: false,
+  currentPopupState: "unknown",
+  globalTheme: "system",
+  forcedTask: null,
   selectedTaskId: "",
   selectedEnvId: "",
   selectedProfileId: ""
@@ -53,6 +58,7 @@ async function switchState(stateName) {
   unknownSiteState.classList.add("hidden");
   extractionReviewState.classList.add("hidden");
   normalExecutionState.classList.add("hidden");
+  state.currentPopupState = stateName;
 
   if (stateName === "unknown") {
     unknownSiteState.classList.remove("hidden");
@@ -62,6 +68,37 @@ async function switchState(stateName) {
     normalExecutionState.classList.remove("hidden");
   }
   await chrome.storage.local.set({ lastPopupState: stateName });
+}
+
+function buildPopupDraft() {
+  return {
+    state: state.currentPopupState,
+    siteText: state.siteText || "",
+    urlPattern: urlPatternInput?.value?.trim() || "",
+    siteName: siteNameInput?.value?.trim() || ""
+  };
+}
+
+async function persistPopupDraft() {
+  await chrome.storage.local.set({ [POPUP_DRAFT_KEY]: buildPopupDraft() });
+}
+
+async function clearPopupDraft() {
+  await chrome.storage.local.remove(POPUP_DRAFT_KEY);
+}
+
+function applyPopupDraft(draft) {
+  if (!draft || typeof draft !== "object") return;
+  if (draft.siteText) {
+    state.siteText = draft.siteText;
+    extractedPreview.textContent = state.siteText;
+  }
+  if (typeof draft.urlPattern === "string") {
+    urlPatternInput.value = draft.urlPattern;
+  }
+  if (typeof draft.siteName === "string") {
+    siteNameInput.value = draft.siteName;
+  }
 }
 
 function matchUrl(url, pattern) {
@@ -110,6 +147,20 @@ function resolveScopedItems(parentItems, localItems, disabledNames) {
   });
   const localEnabled = local.filter((item) => item?.enabled !== false);
   return [...inherited, ...localEnabled];
+}
+
+function findTaskById(taskId, globalTasks, workspace, site) {
+  if (!taskId) return null;
+  const lists = [
+    Array.isArray(site?.tasks) ? site.tasks : [],
+    Array.isArray(workspace?.tasks) ? workspace.tasks : [],
+    Array.isArray(globalTasks) ? globalTasks : []
+  ];
+  for (const list of lists) {
+    const found = list.find((item) => item?.id === taskId);
+    if (found) return found;
+  }
+  return null;
 }
 
 function resolveEffectiveList(globalItems, workspace, site, listKey, disabledKey) {
@@ -378,6 +429,14 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = value;
 }
 
+function resolveThemeForPopup(baseTheme) {
+  const siteTheme = state.currentSite?.theme;
+  if (siteTheme && siteTheme !== "inherit") return siteTheme;
+  const workspaceTheme = state.currentWorkspace?.theme;
+  if (workspaceTheme && workspaceTheme !== "inherit") return workspaceTheme;
+  return baseTheme || "system";
+}
+
 function setAnalyzing(isAnalyzing) {
   state.isAnalyzing = isAnalyzing;
   runBtn.disabled = isAnalyzing;
@@ -604,17 +663,20 @@ async function loadConfig() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const currentUrl = tabs[0]?.url || "";
   
-  const { lastPopupState } = await getStorage(["lastPopupState"]);
+  const { lastPopupState, [POPUP_DRAFT_KEY]: popupDraft } = await getStorage([
+    "lastPopupState",
+    POPUP_DRAFT_KEY
+  ]);
   await detectSite(currentUrl);
-  if (lastPopupState && lastPopupState !== "unknown") {
-    // If we had a state like 'review', we might want to stay there, 
-    // but detectSite might have switched to 'normal' if it matched.
-    // AGENTS.md says popup state must be persisted.
-    if (state.currentSite && lastPopupState === "normal") {
-       await switchState("normal");
-    } else if (!state.currentSite && (lastPopupState === "unknown" || lastPopupState === "review")) {
-       await switchState(lastPopupState);
+  if (state.currentSite) {
+    if (lastPopupState === "normal") {
+      await switchState("normal");
     }
+  } else if (popupDraft?.state === "review") {
+    applyPopupDraft(popupDraft);
+    await switchState("review");
+  } else if (lastPopupState === "unknown") {
+    await switchState("unknown");
   }
 
   const stored = await getStorage([
@@ -624,6 +686,7 @@ async function loadConfig() {
     "shortcuts",
     "workspaces",
     "sites",
+    "theme",
     LAST_TASK_KEY,
     LAST_ENV_KEY,
     LAST_PROFILE_KEY
@@ -650,6 +713,10 @@ async function loadConfig() {
     state.currentWorkspace = activeWorkspace;
     currentWorkspaceName.textContent = activeWorkspace.name || "Global";
   }
+  if (stored.theme) {
+    state.globalTheme = stored.theme;
+  }
+  applyTheme(resolveThemeForPopup(state.globalTheme));
 
   const effectiveEnvs = resolveEffectiveList(
     envs,
@@ -721,7 +788,8 @@ async function loadConfig() {
 
 async function loadTheme() {
   const { theme = "system" } = await getStorage(["theme"]);
-  applyTheme(theme);
+  state.globalTheme = theme;
+  applyTheme(resolveThemeForPopup(theme));
 }
 
 async function handleExtract() {
@@ -758,7 +826,11 @@ async function handleAnalyze() {
   }
 
   const taskId = taskSelect.value;
-  const task = state.tasks.find((item) => item.id === taskId);
+  const forcedTask = state.forcedTask;
+  const task = forcedTask || state.tasks.find((item) => item.id === taskId);
+  if (forcedTask) {
+    state.forcedTask = null;
+  }
   if (!task) {
     setStatus("Select a task.");
     return;
@@ -947,6 +1019,16 @@ function handleCopyRaw() {
   void copyTextToClipboard(text, "Markdown");
 }
 
+async function fillSiteDefaultsFromTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabs[0]?.url) return;
+  const url = new URL(tabs[0].url);
+  urlPatternInput.value = url.hostname + url.pathname + "*";
+  if (!siteNameInput.value.trim()) {
+    siteNameInput.value = url.hostname;
+  }
+}
+
 partialTextPaste.addEventListener("input", async () => {
   const text = partialTextPaste.value.trim();
   if (text.length < 5) return;
@@ -957,10 +1039,9 @@ partialTextPaste.addEventListener("input", async () => {
     if (response?.ok) {
       state.siteText = response.extracted;
       extractedPreview.textContent = state.siteText;
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const url = new URL(tabs[0].url);
-      urlPatternInput.value = url.hostname + url.pathname + "*";
+      await fillSiteDefaultsFromTab();
       switchState("review");
+      await persistPopupDraft();
       setStatus("Review extraction.");
     }
   } catch (error) {
@@ -975,10 +1056,9 @@ extractFullBtn.addEventListener("click", async () => {
     if (response?.ok) {
       state.siteText = response.extracted;
       extractedPreview.textContent = state.siteText;
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const url = new URL(tabs[0].url);
-      urlPatternInput.value = url.hostname + url.pathname + "*";
+      await fillSiteDefaultsFromTab();
       switchState("review");
+      await persistPopupDraft();
       setStatus("Review extraction.");
     }
   } catch (error) {
@@ -986,14 +1066,34 @@ extractFullBtn.addEventListener("click", async () => {
   }
 });
 
+siteNameInput.addEventListener("input", () => {
+  if (state.currentPopupState !== "review") return;
+  void persistPopupDraft();
+});
+
+urlPatternInput.addEventListener("input", () => {
+  if (state.currentPopupState !== "review") return;
+  void persistPopupDraft();
+});
+
 retryExtractBtn.addEventListener("click", () => {
   switchState("unknown");
   partialTextPaste.value = "";
+  extractedPreview.textContent = "";
+  urlPatternInput.value = "";
+  siteNameInput.value = "";
+  state.siteText = "";
+  void clearPopupDraft();
   setStatus("Ready.");
 });
 
 confirmSiteBtn.addEventListener("click", async () => {
+  const name = siteNameInput.value.trim();
   const pattern = urlPatternInput.value.trim();
+  if (!name) {
+    setStatus("Enter a site name.");
+    return;
+  }
   if (!pattern) {
     setStatus("Enter a URL pattern.");
     return;
@@ -1008,12 +1108,14 @@ confirmSiteBtn.addEventListener("click", async () => {
 
   const newSite = {
     id: `site-${Date.now()}`,
+    name,
     urlPattern: pattern,
     workspaceId: "global" // Default to global for now
   };
 
   state.sites.push(newSite);
   await chrome.storage.local.set({ sites: state.sites });
+  await clearPopupDraft();
   state.currentSite = newSite;
   state.currentWorkspace = { name: "Global", id: "global" };
   currentWorkspaceName.textContent = "Global";
@@ -1058,7 +1160,8 @@ async function loadShortcutRunRequest() {
     SHORTCUT_RUN_KEY,
     "shortcuts",
     "workspaces",
-    "sites"
+    "sites",
+    "tasks"
   ]);
   const shortcutId = stored[SHORTCUT_RUN_KEY];
   if (!shortcutId) return;
@@ -1066,7 +1169,12 @@ async function loadShortcutRunRequest() {
   state.shortcutRunPending = true;
   await chrome.storage.local.remove(SHORTCUT_RUN_KEY);
 
+  if (!state.tasks.length) {
+    await loadConfig();
+  }
+
   const globalShortcuts = normalizeConfigList(stored.shortcuts);
+  const globalTasks = normalizeConfigList(stored.tasks);
   const sites = Array.isArray(stored.sites) ? stored.sites : state.sites;
   const workspaces = Array.isArray(stored.workspaces)
     ? stored.workspaces
@@ -1092,9 +1200,28 @@ async function loadShortcutRunRequest() {
     return;
   }
 
-  if (shortcut.taskId) {
-    selectTask(shortcut.taskId, { resetEnv: true });
+  const shortcutTaskId = shortcut.taskId || "";
+  const scopedTask = findTaskById(
+    shortcutTaskId,
+    globalTasks,
+    activeWorkspace,
+    activeSite
+  );
+  if (shortcutTaskId && !scopedTask) {
+    setStatus("Shortcut task is unavailable.");
+    state.shortcutRunPending = false;
+    return;
   }
+
+  if (scopedTask && state.tasks.some((item) => item.id === scopedTask.id)) {
+    selectTask(scopedTask.id, { resetEnv: true });
+  } else if (!state.tasks.length && !scopedTask) {
+    setStatus("No tasks configured.");
+    state.shortcutRunPending = false;
+    return;
+  }
+
+  state.forcedTask = scopedTask || null;
   if (shortcut.envId) {
     setEnvironmentSelection(shortcut.envId);
   }
@@ -1156,6 +1283,7 @@ chrome.storage.onChanged.addListener((changes) => {
   }
 
   if (changes.theme) {
-    applyTheme(changes.theme.newValue || "system");
+    state.globalTheme = changes.theme.newValue || "system";
+    applyTheme(resolveThemeForPopup(state.globalTheme));
   }
 });

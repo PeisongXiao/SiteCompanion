@@ -49,6 +49,7 @@ body {
 
 .toc {
   flex: 0 0 160px;
+  width: 160px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -56,6 +57,9 @@ body {
   position: sticky;
   top: 16px;
   padding: 12px;
+  max-height: calc(100vh - 32px);
+  min-height: 0;
+  overflow: hidden;
   border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--panel);
@@ -77,6 +81,24 @@ body {
 
 .toc-links {
   display: block;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.toc-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+}
+
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .toc ul {
@@ -148,7 +170,7 @@ body {
 }
 
 .sidebar-errors {
-  margin-top: auto;
+  margin-top: 8px;
   border-radius: 10px;
   border: 1px solid #c0392b;
   background: rgba(192, 57, 43, 0.08);
@@ -169,14 +191,6 @@ body {
 }
 
 .title-block {
-  margin-bottom: 16px;
-}
-
-.page-bar {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 12px;
   margin-bottom: 16px;
 }
 
@@ -376,6 +390,30 @@ button:active {
   gap: 12px;
 }
 
+.workspaces,
+.sites {
+  display: grid;
+  gap: 12px;
+}
+
+.workspace-card,
+.site-card {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+  overflow: visible;
+}
+
+.workspace-header,
+.site-header {
+  align-items: flex-end;
+}
+
+.workspace-header .field,
+.site-header .field {
+  margin-bottom: 0;
+}
+
 .task-card {
   padding: 12px;
   border-radius: 12px;
@@ -511,10 +549,20 @@ button:active {
 .api-key-actions .delete,
 .api-config-actions .delete,
 .env-config-actions .delete,
-.task-actions .delete {
+.task-actions .delete,
+.shortcut-actions .delete {
   background: #c0392b;
   border-color: #c0392b;
   color: #fff6f2;
+}
+
+.workspace-header .delete,
+.site-header .delete {
+  background: #c0392b;
+  border-color: #c0392b;
+  color: #fff6f2;
+  padding: 10px 12px;
+  font-size: 13px;
 }
 
 .api-configs {
@@ -617,6 +665,12 @@ button:active {
 }
 
 .task-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.shortcut-actions {
   display: flex;
   gap: 6px;
   justify-content: flex-end;

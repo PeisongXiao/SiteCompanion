@@ -475,6 +475,33 @@ function normalizeConfigList(list) {
     : [];
 }
 
+const TEMPLATE_PLACEHOLDERS = [
+  "PROMPT_GOES_HERE",
+  "SYSTEM_PROMPT_GOES_HERE",
+  "API_KEY_GOES_HERE",
+  "MODEL_GOES_HERE",
+  "API_BASE_URL_GOES_HERE"
+];
+
+function buildTemplateValidationSource(template) {
+  let output = template || "";
+  for (const token of TEMPLATE_PLACEHOLDERS) {
+    output = output.split(`\"${token}\"`).join(JSON.stringify("PLACEHOLDER"));
+    output = output.split(token).join("null");
+  }
+  return output;
+}
+
+function isValidTemplateJson(template) {
+  if (!template) return false;
+  try {
+    JSON.parse(buildTemplateValidationSource(template));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeDisabledInherited(source) {
   const data = source && typeof source === "object" ? source : {};
   return {
@@ -3440,11 +3467,8 @@ function updateSidebarErrors() {
     if (!defaultApiConfig) {
       errors.push("Default environment is missing an API config.");
     } else if (defaultApiConfig.advanced) {
-      if (!defaultApiConfig.apiUrl) {
-        errors.push("Default API config is missing an API URL.");
-      }
-      if (!defaultApiConfig.requestTemplate) {
-        errors.push("Default API config is missing a request template.");
+      if (!isValidTemplateJson(defaultApiConfig.requestTemplate || "")) {
+        errors.push("Default API config request template is invalid JSON.");
       }
     } else {
       if (!defaultApiConfig.apiBaseUrl) {
@@ -3455,12 +3479,7 @@ function updateSidebarErrors() {
       }
     }
 
-    const needsKey =
-      Boolean(defaultApiConfig?.apiKeyHeader) ||
-      Boolean(
-        defaultApiConfig?.requestTemplate?.includes("API_KEY_GOES_HERE")
-      );
-    if (needsKey) {
+    if (!defaultApiConfig.advanced && defaultApiConfig?.apiKeyHeader) {
       const key = enabledApiKeys.find(
         (entry) => entry.id === defaultApiConfig?.apiKeyId
       );

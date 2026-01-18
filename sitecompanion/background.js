@@ -414,14 +414,6 @@ async function handleAnalysisRequest(port, payload, signal) {
       safePost(port, { type: "ERROR", message: "Missing API URL." });
       return;
     }
-    if (!requestTemplate) {
-      safePost(port, { type: "ERROR", message: "Missing request template." });
-      return;
-    }
-    if (apiKeyHeader && !apiKey) {
-      safePost(port, { type: "ERROR", message: "Missing API key." });
-      return;
-    }
   } else {
     if (!apiBaseUrl) {
       safePost(port, { type: "ERROR", message: "Missing API base URL." });

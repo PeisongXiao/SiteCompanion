@@ -186,6 +186,33 @@ function normalizeConfigList(list) {
     : [];
 }
 
+const TEMPLATE_PLACEHOLDERS = [
+  "PROMPT_GOES_HERE",
+  "SYSTEM_PROMPT_GOES_HERE",
+  "API_KEY_GOES_HERE",
+  "MODEL_GOES_HERE",
+  "API_BASE_URL_GOES_HERE"
+];
+
+function buildTemplateValidationSource(template) {
+  let output = template || "";
+  for (const token of TEMPLATE_PLACEHOLDERS) {
+    output = output.split(`\"${token}\"`).join(JSON.stringify("PLACEHOLDER"));
+    output = output.split(token).join("null");
+  }
+  return output;
+}
+
+function isValidTemplateJson(template) {
+  if (!template) return false;
+  try {
+    JSON.parse(buildTemplateValidationSource(template));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveScopedItems(parentItems, localItems, disabledNames) {
   const parent = Array.isArray(parentItems) ? parentItems : [];
   const local = Array.isArray(localItems) ? localItems : [];
@@ -1061,15 +1088,8 @@ async function handleAnalyze() {
       setStatus("Set an API URL in Settings.");
       return;
     }
-    if (!resolvedTemplate) {
-      setStatus("Set a request template in Settings.");
-      return;
-    }
-    const needsKey =
-      Boolean(resolvedApiKeyHeader) ||
-      resolvedTemplate.includes("API_KEY_GOES_HERE");
-    if (needsKey && !apiKey) {
-      setStatus("Add an API key in Settings.");
+    if (!isValidTemplateJson(resolvedTemplate)) {
+      setStatus("Request template JSON is invalid.");
       return;
     }
   } else {

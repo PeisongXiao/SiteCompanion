@@ -2480,6 +2480,7 @@ function collectSites() {
     const nameInput = card.querySelector(".site-name");
     const patternInput = card.querySelector(".site-pattern");
     const workspaceSelect = card.querySelector(".site-workspace");
+    const extractInput = card.querySelector(".site-extract-selector");
     const themeSelect = card.querySelector(".appearance-theme");
     const toolbarSelect = card.querySelector(".appearance-toolbar-position");
     const envsContainer = card.querySelector(".site-envs");
@@ -2496,6 +2497,7 @@ function collectSites() {
       name: (nameInput?.value || "").trim(),
       urlPattern: (patternInput?.value || "").trim(),
       workspaceId: workspaceSelect?.value || "global",
+      extractSelector: (extractInput?.value || "").trim(),
       theme: themeSelect?.value || "inherit",
       toolbarPosition: toolbarSelect?.value || "inherit",
       envConfigs: envsContainer ? collectEnvConfigs(envsContainer) : [],
@@ -2610,6 +2612,22 @@ function buildSiteCard(site, allWorkspaces = []) {
   row.appendChild(wsField);
   row.appendChild(deleteBtn);
   card.appendChild(row);
+
+  const extractField = document.createElement("div");
+  extractField.className = "field";
+  const extractLabel = document.createElement("label");
+  extractLabel.textContent = "Site Text Selector";
+  const extractInput = document.createElement("input");
+  extractInput.type = "text";
+  extractInput.value = site.extractSelector || "";
+  extractInput.className = "site-extract-selector";
+  extractInput.placeholder = "body";
+  extractInput.addEventListener("input", () => {
+    scheduleSidebarErrors();
+  });
+  extractField.appendChild(extractLabel);
+  extractField.appendChild(extractInput);
+  card.appendChild(extractField);
 
   const appearanceSection = buildAppearanceSection({
     theme: site.theme || "inherit",
@@ -3396,6 +3414,7 @@ async function loadSettings() {
         ...site,
         name: site.name || site.urlPattern || "",
         workspaceId: site.workspaceId || "global",
+        extractSelector: typeof site.extractSelector === "string" ? site.extractSelector : "",
         theme: site.theme || "inherit",
         toolbarPosition: site.toolbarPosition || "inherit",
         envConfigs: normalizeConfigList(site.envConfigs),

@@ -22,6 +22,45 @@ function findMinimumScope(text) {
   return deepest;
 }
 
+function escapeSelector(value) {
+  if (window.CSS && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function buildSelector(node) {
+  if (!node || node.nodeType !== 1) return "body";
+  if (node === document.body) return "body";
+  const parts = [];
+  let current = node;
+  while (current && current.nodeType === 1 && current !== document.body) {
+    const tag = current.tagName.toLowerCase();
+    if (current.id) {
+      parts.unshift(`${tag}#${escapeSelector(current.id)}`);
+      break;
+    }
+    let selector = tag;
+    const parent = current.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children).filter(
+        (child) => child.tagName === current.tagName
+      );
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(current) + 1;
+        selector += `:nth-of-type(${index})`;
+      }
+    }
+    parts.unshift(selector);
+    current = parent;
+  }
+  if (current === document.body) {
+    parts.unshift("body");
+  }
+  const selector = parts.join(" > ");
+  return selector || "body";
+}
+
 function normalizeName(value) {
   return (value || "").trim().toLowerCase();
 }
@@ -274,12 +313,36 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: "Scope not found." });
       return;
     }
-    sendResponse({ ok: true, extracted: node.innerText || "" });
+    sendResponse({
+      ok: true,
+      extracted: node.innerText || "",
+      selector: buildSelector(node)
+    });
+    return;
+  }
+  if (message.type === "EXTRACT_BY_SELECTOR") {
+    const selector = message.selector || "";
+    if (!selector) {
+      sendResponse({ ok: false, error: "Missing selector." });
+      return;
+    }
+    let node = null;
+    try {
+      node = document.querySelector(selector);
+    } catch {
+      sendResponse({ ok: false, error: "Invalid selector." });
+      return;
+    }
+    if (!node) {
+      sendResponse({ ok: false, error: "Selector not found." });
+      return;
+    }
+    sendResponse({ ok: true, extracted: node.innerText || "", selector });
     return;
   }
   if (message.type === "EXTRACT_FULL") {
     const extracted = document.body?.innerText || "";
-    sendResponse({ ok: true, extracted });
+    sendResponse({ ok: true, extracted, selector: "body" });
   }
 });
 

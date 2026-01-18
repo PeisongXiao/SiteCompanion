@@ -49,6 +49,7 @@ const state = {
   currentPopupState: "unknown",
   globalTheme: "system",
   forcedTask: null,
+  siteTextSelector: "",
   selectedTaskId: "",
   selectedEnvId: "",
   selectedProfileId: ""
@@ -75,7 +76,8 @@ function buildPopupDraft() {
     state: state.currentPopupState,
     siteText: state.siteText || "",
     urlPattern: urlPatternInput?.value?.trim() || "",
-    siteName: siteNameInput?.value?.trim() || ""
+    siteName: siteNameInput?.value?.trim() || "",
+    siteTextSelector: state.siteTextSelector || ""
   };
 }
 
@@ -98,6 +100,9 @@ function applyPopupDraft(draft) {
   }
   if (typeof draft.siteName === "string") {
     siteNameInput.value = draft.siteName;
+  }
+  if (typeof draft.siteTextSelector === "string") {
+    state.siteTextSelector = draft.siteTextSelector;
   }
 }
 
@@ -190,10 +195,14 @@ function filterApiConfigsForScope(apiConfigs, workspace, site) {
 
 async function detectSite(url) {
   const { sites = [], workspaces = [] } = await getStorage(["sites", "workspaces"]);
-  state.sites = sites;
+  const normalizedSites = (Array.isArray(sites) ? sites : []).map((site) => ({
+    ...site,
+    extractSelector: site?.extractSelector || "body"
+  }));
+  state.sites = normalizedSites;
   state.workspaces = workspaces;
   
-  const site = sites.find(s => matchUrl(url, s.urlPattern));
+  const site = normalizedSites.find((s) => matchUrl(url, s.urlPattern));
   if (site) {
     state.currentSite = site;
     const workspace =
@@ -695,7 +704,12 @@ async function loadConfig() {
   const envs = normalizeConfigList(stored.envConfigs);
   const profiles = normalizeConfigList(stored.profiles);
   const shortcuts = normalizeConfigList(stored.shortcuts);
-  const sites = Array.isArray(stored.sites) ? stored.sites : state.sites;
+  const sites = Array.isArray(stored.sites)
+    ? stored.sites.map((site) => ({
+        ...site,
+        extractSelector: site?.extractSelector || "body"
+      }))
+    : state.sites;
   const workspaces = Array.isArray(stored.workspaces)
     ? stored.workspaces
     : state.workspaces;
@@ -709,6 +723,9 @@ async function loadConfig() {
     activeSite && activeSite.workspaceId
       ? workspaces.find((entry) => entry.id === activeSite.workspaceId)
       : null;
+  if (activeSite) {
+    state.currentSite = activeSite;
+  }
   if (activeWorkspace) {
     state.currentWorkspace = activeWorkspace;
     currentWorkspaceName.textContent = activeWorkspace.name || "Global";
@@ -795,13 +812,18 @@ async function loadTheme() {
 async function handleExtract() {
   setStatus("Extracting...");
   try {
-    const response = await sendToActiveTab({ type: "EXTRACT_FULL" });
+    const selector = state.currentSite?.extractSelector || "body";
+    const response = await sendToActiveTab({
+      type: "EXTRACT_BY_SELECTOR",
+      selector
+    });
     if (!response?.ok) {
       setStatus(response?.error || "No text detected.");
       return false;
     }
 
     state.siteText = response.extracted || "";
+    state.siteTextSelector = response.selector || selector;
     updateSiteTextCount();
     updatePromptCount(0);
     setStatus("Text extracted.");
@@ -1038,6 +1060,7 @@ partialTextPaste.addEventListener("input", async () => {
     const response = await sendToActiveTab({ type: "FIND_SCOPE", text });
     if (response?.ok) {
       state.siteText = response.extracted;
+      state.siteTextSelector = response.selector || "";
       extractedPreview.textContent = state.siteText;
       await fillSiteDefaultsFromTab();
       switchState("review");
@@ -1055,6 +1078,7 @@ extractFullBtn.addEventListener("click", async () => {
     const response = await sendToActiveTab({ type: "EXTRACT_FULL" });
     if (response?.ok) {
       state.siteText = response.extracted;
+      state.siteTextSelector = response.selector || "body";
       extractedPreview.textContent = state.siteText;
       await fillSiteDefaultsFromTab();
       switchState("review");
@@ -1083,6 +1107,7 @@ retryExtractBtn.addEventListener("click", () => {
   urlPatternInput.value = "";
   siteNameInput.value = "";
   state.siteText = "";
+  state.siteTextSelector = "";
   void clearPopupDraft();
   setStatus("Ready.");
 });
@@ -1110,7 +1135,8 @@ confirmSiteBtn.addEventListener("click", async () => {
     id: `site-${Date.now()}`,
     name,
     urlPattern: pattern,
-    workspaceId: "global" // Default to global for now
+    workspaceId: "global", // Default to global for now
+    extractSelector: state.siteTextSelector || "body"
   };
 
   state.sites.push(newSite);

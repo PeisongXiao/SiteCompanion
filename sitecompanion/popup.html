@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WWCompanion</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="title-block">
+      <div class="title-line">
+        <span class="title">WWCompanion</span>
+        <span class="subtitle">AI companion for WaterlooWorks.</span>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="controls-block">
+        <div class="config-block">
+          <div class="selector-row">
+            <div class="field selector-field">
+              <label for="envSelect">Environment</label>
+              <select id="envSelect"></select>
+            </div>
+            <div class="field selector-field">
+              <label for="profileSelect">Profile</label>
+              <select id="profileSelect"></select>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="field inline-field task-field">
+              <label for="taskSelect">Task</label>
+              <select id="taskSelect"></select>
+            </div>
+            <button id="runBtn" class="accent">Run</button>
+            <button id="abortBtn" class="ghost stop-btn hidden" disabled>Stop</button>
+          </div>
+        </div>
+      </div>
+      <div class="meta">
+        <span id="postingCount">Posting: 0 chars</span>
+        <span id="promptCount">Prompt: 0 chars</span>
+        <span id="status" class="status">Idle</span>
+      </div>
+    </section>
+
+    <section class="output">
+      <div id="output" class="output-body" aria-live="polite"></div>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-left">
+        <button id="copyRenderedBtn" class="ghost" type="button">Copy</button>
+        <button id="copyRawBtn" class="ghost" type="button">Copy Markdown</button>
+        <button id="clearOutputBtn" class="ghost" type="button">Clear</button>
+      </div>
+      <button id="settingsBtn" class="link">Open Settings</button>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,683 @@
+const DEFAULT_TASKS = [
+  {
+    id: "task-generic-fit",
+    name: "Generic Fit",
+    text:
+      "You should evaluate for my fit to the job. You don't need to suggest interview prep, we'll leave those for later. a bit of tuning to your answers: please keep things more compact, a single section for the evaluation is enough, you don't need to analyze every bullet point in the posting."
+  },
+  {
+    id: "task-ratings-only",
+    name: "Ratings Only",
+    text:
+      "Give ratings out of 10 with headings and do not include any other text.\n\n1. Fit evaluation: my fit to the role.\n2. Company status: how well this company offers career development for me.\n3. Pay: use $25 CAD per hour as a baseline; rate the compensation."
+  }
+];
+
+const DEFAULT_SETTINGS = {
+  apiKey: "",
+  apiKeys: [],
+  activeApiKeyId: "",
+  apiConfigs: [],
+  activeApiConfigId: "",
+  envConfigs: [],
+  activeEnvConfigId: "",
+  profiles: [],
+  apiBaseUrl: "https://api.openai.com/v1",
+  apiKeyHeader: "Authorization",
+  apiKeyPrefix: "Bearer ",
+  model: "gpt-4o-mini",
+  systemPrompt:
+    "You are a precise, honest assistant. Be concise and avoid inventing details, be critical about evaluations. You should put in a small summary of all the sections at the end. You should answer in no longer than 3 sections including the summary. And remember to bold or italicize key points.",
+  resume: "",
+  tasks: DEFAULT_TASKS,
+  theme: "system"
+};
+
+const OUTPUT_STORAGE_KEY = "lastOutput";
+const AUTO_RUN_KEY = "autoRunDefaultTask";
+let activeAbortController = null;
+let keepalivePort = null;
+const streamState = {
+  active: false,
+  outputText: "",
+  subscribers: new Set()
+};
+
+function resetAbort() {
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  }
+  closeKeepalive();
+}
+
+function openKeepalive(tabId) {
+  if (!tabId || keepalivePort) return;
+  try {
+    keepalivePort = chrome.tabs.connect(tabId, { name: "wwcompanion-keepalive" });
+    keepalivePort.onDisconnect.addListener(() => {
+      keepalivePort = null;
+    });
+  } catch {
+    keepalivePort = null;
+  }
+}
+
+function closeKeepalive() {
+  if (!keepalivePort) return;
+  try {
+    keepalivePort.disconnect();
+  } catch {
+    // Ignore disconnect failures.
+  }
+  keepalivePort = null;
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const stored = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
+  const updates = {};
+
+  for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+    const existing = stored[key];
+    const missing =
+      existing === undefined ||
+      existing === null ||
+      (key === "tasks" && !Array.isArray(existing));
+
+    if (missing) updates[key] = value;
+  }
+
+  const hasApiKeys =
+    Array.isArray(stored.apiKeys) && stored.apiKeys.length > 0;
+
+  if (!hasApiKeys && stored.apiKey) {
+    const id = crypto?.randomUUID
+      ? crypto.randomUUID()
+      : `key-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    updates.apiKeys = [{ id, name: "Default", key: stored.apiKey }];
+    updates.activeApiKeyId = id;
+  } else if (hasApiKeys && stored.activeApiKeyId) {
+    const exists = stored.apiKeys.some((key) => key.id === stored.activeApiKeyId);
+    if (!exists) {
+      updates.activeApiKeyId = stored.apiKeys[0].id;
+    }
+  } else if (hasApiKeys && !stored.activeApiKeyId) {
+    updates.activeApiKeyId = stored.apiKeys[0].id;
+  }
+
+  const hasApiConfigs =
+    Array.isArray(stored.apiConfigs) && stored.apiConfigs.length > 0;
+
+  if (!hasApiConfigs) {
+    const fallbackKeyId =
+      updates.activeApiKeyId ||
+      stored.activeApiKeyId ||
+      stored.apiKeys?.[0]?.id ||
+      "";
+    const id = crypto?.randomUUID
+      ? crypto.randomUUID()
+      : `config-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    updates.apiConfigs = [
+      {
+        id,
+        name: "Default",
+        apiBaseUrl: stored.apiBaseUrl || DEFAULT_SETTINGS.apiBaseUrl,
+        apiKeyHeader: stored.apiKeyHeader || DEFAULT_SETTINGS.apiKeyHeader,
+        apiKeyPrefix: stored.apiKeyPrefix || DEFAULT_SETTINGS.apiKeyPrefix,
+        model: stored.model || DEFAULT_SETTINGS.model,
+        apiKeyId: fallbackKeyId,
+        apiUrl: "",
+        requestTemplate: "",
+        advanced: false
+      }
+    ];
+    updates.activeApiConfigId = id;
+  } else if (stored.activeApiConfigId) {
+    const exists = stored.apiConfigs.some(
+      (config) => config.id === stored.activeApiConfigId
+    );
+    if (!exists) {
+      updates.activeApiConfigId = stored.apiConfigs[0].id;
+    }
+    const fallbackKeyId =
+      updates.activeApiKeyId ||
+      stored.activeApiKeyId ||
+      stored.apiKeys?.[0]?.id ||
+      "";
+    const normalizedConfigs = stored.apiConfigs.map((config) => ({
+      ...config,
+      apiKeyId: config.apiKeyId || fallbackKeyId,
+      apiUrl: config.apiUrl || "",
+      requestTemplate: config.requestTemplate || "",
+      advanced: Boolean(config.advanced)
+    }));
+    const needsUpdate = normalizedConfigs.some((config, index) => {
+      const original = stored.apiConfigs[index];
+      return (
+        config.apiKeyId !== original.apiKeyId ||
+        (config.apiUrl || "") !== (original.apiUrl || "") ||
+        (config.requestTemplate || "") !== (original.requestTemplate || "") ||
+        Boolean(config.advanced) !== Boolean(original.advanced)
+      );
+    });
+    if (needsUpdate) {
+      updates.apiConfigs = normalizedConfigs;
+    }
+  } else {
+    updates.activeApiConfigId = stored.apiConfigs[0].id;
+    const fallbackKeyId =
+      updates.activeApiKeyId ||
+      stored.activeApiKeyId ||
+      stored.apiKeys?.[0]?.id ||
+      "";
+    const normalizedConfigs = stored.apiConfigs.map((config) => ({
+      ...config,
+      apiKeyId: config.apiKeyId || fallbackKeyId,
+      apiUrl: config.apiUrl || "",
+      requestTemplate: config.requestTemplate || "",
+      advanced: Boolean(config.advanced)
+    }));
+    const needsUpdate = normalizedConfigs.some((config, index) => {
+      const original = stored.apiConfigs[index];
+      return (
+        config.apiKeyId !== original.apiKeyId ||
+        (config.apiUrl || "") !== (original.apiUrl || "") ||
+        (config.requestTemplate || "") !== (original.requestTemplate || "") ||
+        Boolean(config.advanced) !== Boolean(original.advanced)
+      );
+    });
+    if (needsUpdate) {
+      updates.apiConfigs = normalizedConfigs;
+    }
+  }
+
+  const resolvedApiConfigs = updates.apiConfigs || stored.apiConfigs || [];
+  const resolvedActiveApiConfigId =
+    updates.activeApiConfigId ||
+    stored.activeApiConfigId ||
+    resolvedApiConfigs[0]?.id ||
+    "";
+  const hasEnvConfigs =
+    Array.isArray(stored.envConfigs) && stored.envConfigs.length > 0;
+
+  if (!hasEnvConfigs) {
+    const id = crypto?.randomUUID
+      ? crypto.randomUUID()
+      : `env-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    updates.envConfigs = [
+      {
+        id,
+        name: "Default",
+        apiConfigId: resolvedActiveApiConfigId,
+        systemPrompt: stored.systemPrompt || DEFAULT_SETTINGS.systemPrompt
+      }
+    ];
+    updates.activeEnvConfigId = id;
+  } else {
+    const normalizedEnvs = stored.envConfigs.map((config) => ({
+      ...config,
+      apiConfigId: config.apiConfigId || resolvedActiveApiConfigId,
+      systemPrompt: config.systemPrompt ?? ""
+    }));
+    const envNeedsUpdate = normalizedEnvs.some((config, index) => {
+      const original = stored.envConfigs[index];
+      return (
+        config.apiConfigId !== original.apiConfigId ||
+        (config.systemPrompt || "") !== (original.systemPrompt || "")
+      );
+    });
+    if (envNeedsUpdate) {
+      updates.envConfigs = normalizedEnvs;
+    }
+
+    const envActiveId = updates.activeEnvConfigId || stored.activeEnvConfigId;
+    if (envActiveId) {
+      const exists = stored.envConfigs.some(
+        (config) => config.id === envActiveId
+      );
+      if (!exists) {
+        updates.activeEnvConfigId = stored.envConfigs[0].id;
+      }
+    } else {
+      updates.activeEnvConfigId = stored.envConfigs[0].id;
+    }
+  }
+
+  const hasProfiles =
+    Array.isArray(stored.profiles) && stored.profiles.length > 0;
+  if (!hasProfiles) {
+    const id = crypto?.randomUUID
+      ? crypto.randomUUID()
+      : `profile-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    updates.profiles = [
+      {
+        id,
+        name: "Default",
+        text: stored.resume || "",
+        type: "Resume"
+      }
+    ];
+  } else {
+    const normalizedProfiles = stored.profiles.map((profile) => ({
+      ...profile,
+      text: profile.text ?? "",
+      type: profile.type === "Profile" ? "Profile" : "Resume"
+    }));
+    const needsProfileUpdate = normalizedProfiles.some(
+      (profile, index) =>
+        (profile.text || "") !== (stored.profiles[index]?.text || "") ||
+        (profile.type || "Resume") !== (stored.profiles[index]?.type || "Resume")
+    );
+    if (needsProfileUpdate) {
+      updates.profiles = normalizedProfiles;
+    }
+  }
+
+  const resolvedEnvConfigs = updates.envConfigs || stored.envConfigs || [];
+  const defaultEnvId =
+    resolvedEnvConfigs[0]?.id ||
+    updates.activeEnvConfigId ||
+    stored.activeEnvConfigId ||
+    "";
+  const resolvedProfiles = updates.profiles || stored.profiles || [];
+  const defaultProfileId = resolvedProfiles[0]?.id || "";
+  const taskSource = Array.isArray(updates.tasks)
+    ? updates.tasks
+    : Array.isArray(stored.tasks)
+      ? stored.tasks
+      : [];
+  if (taskSource.length) {
+    const normalizedTasks = taskSource.map((task) => ({
+      ...task,
+      defaultEnvId: task.defaultEnvId || defaultEnvId,
+      defaultProfileId: task.defaultProfileId || defaultProfileId
+    }));
+    const needsTaskUpdate = normalizedTasks.some(
+      (task, index) =>
+        task.defaultEnvId !== taskSource[index]?.defaultEnvId ||
+        task.defaultProfileId !== taskSource[index]?.defaultProfileId
+    );
+    if (needsTaskUpdate) {
+      updates.tasks = normalizedTasks;
+    }
+  }
+
+  if (Object.keys(updates).length) {
+    await chrome.storage.local.set(updates);
+  }
+});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "analysis") return;
+
+  streamState.subscribers.add(port);
+  port.onDisconnect.addListener(() => {
+    streamState.subscribers.delete(port);
+  });
+
+  if (streamState.active) {
+    safePost(port, {
+      type: "SYNC",
+      text: streamState.outputText,
+      streaming: true
+    });
+  }
+
+  port.onMessage.addListener((message) => {
+    if (message?.type === "START_ANALYSIS") {
+      streamState.outputText = "";
+      resetAbort();
+      const controller = new AbortController();
+      activeAbortController = controller;
+      const request = handleAnalysisRequest(port, message.payload, controller.signal);
+      void request
+        .catch((error) => {
+          if (error?.name === "AbortError") {
+            safePost(port, { type: "ABORTED" });
+            return;
+          }
+          safePost(port, {
+            type: "ERROR",
+            message: error?.message || "Unknown error during analysis."
+          });
+        })
+        .finally(() => {
+          if (activeAbortController === controller) {
+            activeAbortController = null;
+          }
+        });
+      return;
+    }
+
+    if (message?.type === "ABORT_ANALYSIS") {
+      resetAbort();
+    }
+  });
+
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "RUN_DEFAULT_TASK") return;
+  void chrome.storage.local.set({ [AUTO_RUN_KEY]: Date.now() });
+  if (chrome.action?.openPopup) {
+    void chrome.action.openPopup().catch(() => {});
+  }
+});
+
+function buildUserMessage(resume, resumeType, task, posting) {
+  const header = resumeType === "Profile" ? "=== PROFILE ===" : "=== RESUME ===";
+  return [
+    header,
+    resume || "",
+    "",
+    "=== TASK ===",
+    task || "",
+    "",
+    "=== JOB POSTING ===",
+    posting || ""
+  ].join("\n");
+}
+
+function safePost(port, message) {
+  try {
+    port.postMessage(message);
+  } catch {
+    // Port can disconnect when the popup closes; ignore post failures.
+  }
+}
+
+function broadcast(message) {
+  for (const port of streamState.subscribers) {
+    safePost(port, message);
+  }
+}
+
+async function handleAnalysisRequest(port, payload, signal) {
+  streamState.outputText = "";
+  streamState.active = true;
+
+  const {
+    apiKey,
+    apiMode,
+    apiUrl,
+    requestTemplate,
+    apiBaseUrl,
+    apiKeyHeader,
+    apiKeyPrefix,
+    model,
+    systemPrompt,
+    resume,
+    resumeType,
+    taskText,
+    postingText,
+    tabId
+  } = payload || {};
+
+  const isAdvanced = apiMode === "advanced";
+  if (isAdvanced) {
+    if (!apiUrl) {
+      safePost(port, { type: "ERROR", message: "Missing API URL." });
+      return;
+    }
+    if (!requestTemplate) {
+      safePost(port, { type: "ERROR", message: "Missing request template." });
+      return;
+    }
+    if (apiKeyHeader && !apiKey) {
+      safePost(port, { type: "ERROR", message: "Missing API key." });
+      return;
+    }
+  } else {
+    if (!apiBaseUrl) {
+      safePost(port, { type: "ERROR", message: "Missing API base URL." });
+      return;
+    }
+
+    if (apiKeyHeader && !apiKey) {
+      safePost(port, { type: "ERROR", message: "Missing API key." });
+      return;
+    }
+
+    if (!model) {
+      safePost(port, { type: "ERROR", message: "Missing model name." });
+      return;
+    }
+  }
+
+  if (!postingText) {
+    safePost(port, { type: "ERROR", message: "No job posting text provided." });
+    return;
+  }
+
+  if (!taskText) {
+    safePost(port, { type: "ERROR", message: "No task prompt selected." });
+    return;
+  }
+
+  const userMessage = buildUserMessage(
+    resume,
+    resumeType,
+    taskText,
+    postingText
+  );
+
+  await chrome.storage.local.set({ [OUTPUT_STORAGE_KEY]: "" });
+  openKeepalive(tabId);
+
+  try {
+    if (isAdvanced) {
+      await streamCustomCompletion({
+        apiKey,
+        apiUrl,
+        requestTemplate,
+        apiKeyHeader,
+        apiKeyPrefix,
+        apiBaseUrl,
+        model,
+        systemPrompt: systemPrompt || "",
+        userMessage,
+        signal,
+        onDelta: (text) => {
+          streamState.outputText += text;
+          broadcast({ type: "DELTA", text });
+        }
+      });
+    } else {
+      await streamChatCompletion({
+        apiKey,
+        apiBaseUrl,
+        apiKeyHeader,
+        apiKeyPrefix,
+        model,
+        systemPrompt: systemPrompt || "",
+        userMessage,
+        signal,
+        onDelta: (text) => {
+          streamState.outputText += text;
+          broadcast({ type: "DELTA", text });
+        }
+      });
+    }
+
+    broadcast({ type: "DONE" });
+  } finally {
+    streamState.active = false;
+    await chrome.storage.local.set({ [OUTPUT_STORAGE_KEY]: streamState.outputText });
+    closeKeepalive();
+  }
+}
+
+function buildChatUrl(apiBaseUrl) {
+  const trimmed = (apiBaseUrl || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (trimmed.endsWith("/chat/completions")) return trimmed;
+  return `${trimmed}/chat/completions`;
+}
+
+function buildAuthHeader(apiKeyHeader, apiKeyPrefix, apiKey) {
+  if (!apiKeyHeader) return null;
+  return {
+    name: apiKeyHeader,
+    value: `${apiKeyPrefix || ""}${apiKey || ""}`
+  };
+}
+
+function replaceQuotedToken(template, token, value) {
+  const quoted = `"${token}"`;
+  const jsonValue = JSON.stringify(value ?? "");
+  return template.split(quoted).join(jsonValue);
+}
+
+function replaceTemplateTokens(template, replacements) {
+  let output = template || "";
+  for (const [token, value] of Object.entries(replacements)) {
+    output = replaceQuotedToken(output, token, value ?? "");
+    output = output.split(token).join(value ?? "");
+  }
+  return output;
+}
+
+function replaceUrlTokens(url, replacements) {
+  let output = url || "";
+  for (const [token, value] of Object.entries(replacements)) {
+    output = output.split(token).join(encodeURIComponent(value ?? ""));
+  }
+  return output;
+}
+
+function buildTemplateBody(template, replacements) {
+  const filled = replaceTemplateTokens(template, replacements);
+  try {
+    return JSON.parse(filled);
+  } catch {
+    throw new Error("Invalid request template JSON.");
+  }
+}
+
+async function readSseStream(response, onDelta) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  // OpenAI-compatible SSE stream; parse incremental deltas from data lines.
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+
+      const data = trimmed.slice(5).trim();
+      if (!data) continue;
+      if (data === "[DONE]") return;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        continue;
+      }
+
+      const delta = parsed?.choices?.[0]?.delta?.content;
+      if (delta) onDelta(delta);
+    }
+  }
+}
+
+async function streamChatCompletion({
+  apiKey,
+  apiBaseUrl,
+  apiKeyHeader,
+  apiKeyPrefix,
+  model,
+  systemPrompt,
+  userMessage,
+  signal,
+  onDelta
+}) {
+  const chatUrl = buildChatUrl(apiBaseUrl);
+  if (!chatUrl) {
+    throw new Error("Invalid API base URL.");
+  }
+
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  const authHeader = buildAuthHeader(apiKeyHeader, apiKeyPrefix, apiKey);
+  if (authHeader) {
+    headers[authHeader.name] = authHeader.value;
+  }
+
+  const response = await fetch(chatUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      stream: true,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ]
+    }),
+    signal
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API error ${response.status}: ${errorText}`);
+  }
+
+  await readSseStream(response, onDelta);
+}
+
+async function streamCustomCompletion({
+  apiKey,
+  apiUrl,
+  requestTemplate,
+  apiKeyHeader,
+  apiKeyPrefix,
+  apiBaseUrl,
+  model,
+  systemPrompt,
+  userMessage,
+  signal,
+  onDelta
+}) {
+  const replacements = {
+    PROMPT_GOES_HERE: userMessage,
+    SYSTEM_PROMPT_GOES_HERE: systemPrompt,
+    API_KEY_GOES_HERE: apiKey,
+    MODEL_GOES_HERE: model || "",
+    API_BASE_URL_GOES_HERE: apiBaseUrl || ""
+  };
+  const resolvedUrl = replaceUrlTokens(apiUrl, replacements);
+  const body = buildTemplateBody(requestTemplate, replacements);
+
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  const authHeader = buildAuthHeader(apiKeyHeader, apiKeyPrefix, apiKey);
+  if (authHeader) {
+    headers[authHeader.name] = authHeader.value;
+  }
+
+  const response = await fetch(resolvedUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API error ${response.status}: ${errorText}`);
+  }
+
+  await readSseStream(response, onDelta);
+}

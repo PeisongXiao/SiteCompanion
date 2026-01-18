@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WWCompanion Settings</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <header class="title-block">
+      <div class="title">WWCompanion Settings</div>
+      <div class="subtitle">Configure prompts, resume, and API access</div>
+    </header>
+    <div class="page-bar">
+      <div id="status" class="status"></div>
+      <button id="saveBtn" class="accent">Save Settings</button>
+    </div>
+
+    <div class="settings-layout">
+      <nav class="toc" aria-label="Settings table of contents">
+        <div class="toc-heading">WWCompanion Settings</div>
+        <button id="saveBtnSidebar" class="accent" type="button">Save Settings</button>
+        <div id="statusSidebar" class="status"> </div>
+        <div class="toc-title">Sections</div>
+        <div class="toc-links">
+          <a href="#appearance-panel">Appearance</a>
+          <a href="#api-keys-panel">API Keys</a>
+          <a href="#api-panel">API</a>
+          <a href="#environment-panel">Environment</a>
+          <a href="#profiles-panel">My Profiles</a>
+          <a href="#tasks-panel">Task Presets</a>
+        </div>
+        <div id="sidebarErrors" class="sidebar-errors hidden"></div>
+      </nav>
+      <main class="settings-main">
+    <details class="panel" id="appearance-panel">
+      <summary class="panel-summary">
+        <span class="panel-caret" aria-hidden="true">
+          <span class="caret-closed">▸</span>
+          <span class="caret-open">▾</span>
+        </span>
+        <h2>Appearance</h2>
+      </summary>
+      <div class="panel-body">
+        <div class="field">
+          <label for="themeSelect">Theme</label>
+          <select id="themeSelect">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel" id="api-keys-panel">
+      <summary class="panel-summary">
+        <span class="panel-caret" aria-hidden="true">
+          <span class="caret-closed">▸</span>
+          <span class="caret-open">▾</span>
+        </span>
+        <h2>API KEYS</h2>
+      </summary>
+      <div class="panel-body">
+        <div class="row">
+          <div></div>
+          <button id="addApiKeyBtn" class="ghost" type="button">Add Key</button>
+        </div>
+        <div id="apiKeys" class="api-keys"></div>
+      </div>
+    </details>
+
+    <details class="panel" id="api-panel">
+      <summary class="panel-summary">
+        <span class="panel-caret" aria-hidden="true">
+          <span class="caret-closed">▸</span>
+          <span class="caret-open">▾</span>
+        </span>
+        <h2>API</h2>
+      </summary>
+      <div class="panel-body">
+        <div class="row">
+          <div></div>
+          <div class="row-actions">
+            <button id="addApiConfigBtn" class="ghost" type="button">Add Config</button>
+          </div>
+        </div>
+        <div id="apiConfigs" class="api-configs"></div>
+      </div>
+    </details>
+
+    <details class="panel" id="environment-panel">
+      <summary class="panel-summary">
+        <span class="panel-caret" aria-hidden="true">
+          <span class="caret-closed">▸</span>
+          <span class="caret-open">▾</span>
+        </span>
+        <div class="row-title">
+          <h2>Environment</h2>
+          <span class="hint hint-accent">API configuration and system prompt go here</span>
+        </div>
+      </summary>
+      <div class="panel-body">
+        <div class="row">
+          <div></div>
+          <button id="addEnvConfigBtn" class="ghost" type="button">Add Config</button>
+        </div>
+        <div id="envConfigs" class="env-configs"></div>
+      </div>
+    </details>
+
+    <details class="panel" id="profiles-panel">
+      <summary class="panel-summary">
+        <span class="panel-caret" aria-hidden="true">
+          <span class="caret-closed">▸</span>
+          <span class="caret-open">▾</span>
+        </span>
+        <div class="row-title">
+          <h2>My Profiles</h2>
+          <span class="hint hint-accent">Text to your resumes or generic profiles goes here</span>
+        </div>
+      </summary>
+      <div class="panel-body">
+        <div class="row">
+          <div></div>
+          <button id="addProfileBtn" class="ghost" type="button">Add Profile</button>
+        </div>
+        <div id="profiles" class="profiles"></div>
+      </div>
+    </details>
+
+    <details class="panel" id="tasks-panel">
+      <summary class="panel-summary">
+        <span class="panel-caret" aria-hidden="true">
+          <span class="caret-closed">▸</span>
+          <span class="caret-open">▾</span>
+        </span>
+        <div class="row-title">
+          <h2>Task Presets</h2>
+          <span class="hint hint-accent">Top task is the default</span>
+        </div>
+      </summary>
+      <div class="panel-body">
+        <div class="row">
+          <div></div>
+          <button id="addTaskBtn" class="ghost" type="button">Add Task</button>
+        </div>
+        <div id="tasks" class="tasks"></div>
+      </div>
+    </details>
+      </main>
+    </div>
+
+    <script src="settings.js"></script>
+  </body>
+</html>

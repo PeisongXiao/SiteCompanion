@@ -200,35 +200,28 @@ body {
 }
 
 .panel-summary {
-  list-style: none;
-  cursor: pointer;
-  display: flex;
-  align-items: baseline;
-  justify-content: flex-start;
-  gap: 12px;
-  padding: 12px 16px;
-  margin: 0;
-}
-
-/* Restore native marker but keep list-style: none from above? No, remove list-style: none to show marker. */
-/* Wait, display: flex might hide marker in some browsers. */
-/* Usually marker is ::marker pseudo-element on summary. */
-/* To show native marker, summary should be display: list-item or similar? */
-/* Actually, standard is display: block (or list-item). Flex might kill it. */
-/* If the user wants native glyphs, I should use list-item and maybe position the h2? */
-
-/* Let's try reverting panel-summary to default display and styling h2 inline. */
-
-.panel-summary {
   cursor: pointer;
   padding: 12px 16px;
   margin: 0;
-  /* display: list-item; default */
+  display: list-item;
+  list-style: revert;
+  list-style-position: inside;
 }
 
-/* Need to align H2. */
-.panel-summary h2 {
+.panel-summary::marker {
+  color: var(--muted);
+}
+
+.panel-summary h2,
+.panel-summary h3 {
   display: inline;
+}
+
+.panel-summary .row-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .sub-panel .panel-summary {
@@ -312,6 +305,20 @@ label {
   color: var(--muted);
 }
 
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.toggle-label input[type="checkbox"] {
+  width: auto;
+}
+
 input,
 textarea,
 select {
@@ -376,6 +383,109 @@ button:active {
   background: var(--card-bg);
   display: grid;
   gap: 8px;
+}
+
+.shortcuts {
+  display: grid;
+  gap: 12px;
+}
+
+.shortcut-card {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  display: grid;
+  gap: 8px;
+}
+
+.scope-group {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.scope-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.inherited-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.inherited-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inherited-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.inherited-button input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.inherited-item.is-enabled .inherited-button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff9f3;
+  box-shadow: 0 8px 20px rgba(177, 77, 43, 0.2);
+}
+
+.inherited-item.is-disabled .inherited-button {
+  background: transparent;
+  color: var(--muted);
+}
+
+.inherited-item.is-overridden .inherited-button {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.dup-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dup-select {
+  min-width: 160px;
+}
+
+.sites-list {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.sites-list a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.sites-list a:hover {
+  color: var(--ink);
 }
 
 .api-keys {

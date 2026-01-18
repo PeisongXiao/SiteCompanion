@@ -22,7 +22,32 @@ function findMinimumScope(text) {
   return deepest;
 }
 
-function createToolbar(presets, position = "bottom-right") {
+function normalizeName(value) {
+  return (value || "").trim().toLowerCase();
+}
+
+function resolveScopedItems(parentItems, localItems, disabledNames) {
+  const parent = Array.isArray(parentItems) ? parentItems : [];
+  const local = Array.isArray(localItems) ? localItems : [];
+  const disabledSet = new Set(
+    (disabledNames || []).map((name) => normalizeName(name)).filter(Boolean)
+  );
+  const localNameSet = new Set(
+    local.map((item) => normalizeName(item.name)).filter(Boolean)
+  );
+  const inherited = parent.filter((item) => {
+    if (item?.enabled === false) return false;
+    const key = normalizeName(item?.name);
+    if (!key) return false;
+    if (localNameSet.has(key)) return false;
+    if (disabledSet.has(key)) return false;
+    return true;
+  });
+  const localEnabled = local.filter((item) => item?.enabled !== false);
+  return [...inherited, ...localEnabled];
+}
+
+function createToolbar(shortcuts, position = "bottom-right") {
   let toolbar = document.getElementById("sitecompanion-toolbar");
   if (toolbar) toolbar.remove();
 
@@ -63,16 +88,16 @@ function createToolbar(presets, position = "bottom-right") {
     font-family: system-ui, sans-serif;
   `;
 
-  if (!presets || !presets.length) {
+  if (!shortcuts || !shortcuts.length) {
     const label = document.createElement("span");
     label.textContent = "SiteCompanion";
     label.style.fontSize = "12px";
     label.style.color = "#6b5f55";
     toolbar.appendChild(label);
   } else {
-    for (const preset of presets) {
+    for (const shortcut of shortcuts) {
       const btn = document.createElement("button");
-      btn.textContent = preset.name;
+      btn.textContent = shortcut.name;
       btn.style.cssText = `
         padding: 6px 12px;
         background: #b14d2b;
@@ -83,7 +108,7 @@ function createToolbar(presets, position = "bottom-right") {
         font-size: 12px;
       `;
       btn.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "RUN_PRESET", presetId: preset.id });
+        chrome.runtime.sendMessage({ type: "RUN_SHORTCUT", shortcutId: shortcut.id });
       });
       toolbar.appendChild(btn);
     }
@@ -95,36 +120,68 @@ function createToolbar(presets, position = "bottom-right") {
 
 
 function matchUrl(url, pattern) {
-
   if (!pattern) return false;
-
-  const regex = new RegExp("^" + pattern.split("*").join(".*") + "$");
-
+  let regex = null;
   try {
-
-    const urlObj = new URL(url);
-
-    const target = urlObj.hostname + urlObj.pathname;
-
-    return regex.test(target);
-
+    regex = new RegExp("^" + pattern.split("*").join(".*") + "$");
   } catch {
-
     return false;
-
   }
-
+  try {
+    const urlObj = new URL(url);
+    const target = urlObj.hostname + urlObj.pathname;
+    return regex.test(target);
+  } catch {
+    return false;
+  }
 }
 
 
 
 async function refreshToolbar() {
-  const { sites = [], presets = [], toolbarPosition = "bottom-right" } = await chrome.storage.local.get(["sites", "presets", "toolbarPosition"]);
+  let {
+    sites = [],
+    workspaces = [],
+    shortcuts = [],
+    presets = [],
+    toolbarPosition = "bottom-right"
+  } = await chrome.storage.local.get([
+    "sites",
+    "workspaces",
+    "shortcuts",
+    "presets",
+    "toolbarPosition"
+  ]);
   const currentUrl = window.location.href;
   const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
   
   if (site) {
-    createToolbar(presets, toolbarPosition);
+    if (!shortcuts.length && Array.isArray(presets) && presets.length) {
+      shortcuts = presets;
+      await chrome.storage.local.set({ shortcuts });
+      await chrome.storage.local.remove("presets");
+    }
+    const workspace =
+      workspaces.find((ws) => ws.id === site.workspaceId) || null;
+    const workspaceDisabled = workspace?.disabledInherited?.shortcuts || [];
+    const siteDisabled = site?.disabledInherited?.shortcuts || [];
+    const workspaceShortcuts = resolveScopedItems(
+      shortcuts,
+      workspace?.shortcuts || [],
+      workspaceDisabled
+    );
+    const siteShortcuts = resolveScopedItems(
+      workspaceShortcuts,
+      site.shortcuts || [],
+      siteDisabled
+    );
+    const resolvedPosition =
+      site.toolbarPosition && site.toolbarPosition !== "inherit"
+        ? site.toolbarPosition
+        : workspace?.toolbarPosition && workspace.toolbarPosition !== "inherit"
+          ? workspace.toolbarPosition
+          : toolbarPosition;
+    createToolbar(siteShortcuts, resolvedPosition);
   }
 }
 
@@ -140,4 +197,25 @@ const observer = new MutationObserver(() => {
 
 // observer.observe(document.documentElement, { childList: true, subtree: true });
 
-refreshToolbar();
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || typeof message !== "object") return;
+  if (message.type === "FIND_SCOPE") {
+    const node = findMinimumScope(message.text || "");
+    if (!node) {
+      sendResponse({ ok: false, error: "Scope not found." });
+      return;
+    }
+    sendResponse({ ok: true, extracted: node.innerText || "" });
+    return;
+  }
+  if (message.type === "EXTRACT_FULL") {
+    const extracted = document.body?.innerText || "";
+    sendResponse({ ok: true, extracted });
+  }
+});
+
+try {
+  refreshToolbar();
+} catch (error) {
+  console.warn("SiteCompanion toolbar failed:", error);
+}

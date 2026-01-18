@@ -29,12 +29,15 @@ const DEFAULT_SETTINGS = {
   systemPrompt:
     "You are a precise, honest assistant. Be concise and avoid inventing details, be critical about evaluations. You should put in a small summary of all the sections at the end. You should answer in no longer than 3 sections including the summary. And remember to bold or italicize key points.",
   tasks: DEFAULT_TASKS,
+  shortcuts: [],
   theme: "system",
+  toolbarAutoHide: true,
   workspaces: []
 };
 
 const OUTPUT_STORAGE_KEY = "lastOutput";
 const AUTO_RUN_KEY = "autoRunDefaultTask";
+const SHORTCUT_RUN_KEY = "runShortcutId";
 let activeAbortController = null;
 let keepalivePort = null;
 const streamState = {
@@ -354,6 +357,16 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "RUN_SHORTCUT") {
+    const shortcutId = message.shortcutId || "";
+    if (shortcutId) {
+      void chrome.storage.local.set({ [SHORTCUT_RUN_KEY]: shortcutId });
+      if (chrome.action?.openPopup) {
+        void chrome.action.openPopup().catch(() => {});
+      }
+    }
+    return;
+  }
   if (message?.type !== "RUN_DEFAULT_TASK") return;
   void chrome.storage.local.set({ [AUTO_RUN_KEY]: Date.now() });
   if (chrome.action?.openPopup) {

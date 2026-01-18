@@ -14,6 +14,7 @@ const clearOutputBtn = document.getElementById("clearOutputBtn");
 
 const OUTPUT_STORAGE_KEY = "lastOutput";
 const AUTO_RUN_KEY = "autoRunDefaultTask";
+const SHORTCUT_RUN_KEY = "runShortcutId";
 const LAST_TASK_KEY = "lastSelectedTaskId";
 const LAST_ENV_KEY = "lastSelectedEnvId";
 const LAST_PROFILE_KEY = "lastSelectedProfileId";
@@ -42,6 +43,7 @@ const state = {
   isAnalyzing: false,
   outputRaw: "",
   autoRunPending: false,
+  shortcutRunPending: false,
   selectedTaskId: "",
   selectedEnvId: "",
   selectedProfileId: ""
@@ -64,7 +66,12 @@ async function switchState(stateName) {
 
 function matchUrl(url, pattern) {
   if (!pattern) return false;
-  const regex = new RegExp("^" + pattern.split("*").join(".*") + "$");
+  let regex = null;
+  try {
+    regex = new RegExp("^" + pattern.split("*").join(".*") + "$");
+  } catch {
+    return false;
+  }
   try {
     const urlObj = new URL(url);
     const target = urlObj.hostname + urlObj.pathname;
@@ -72,6 +79,62 @@ function matchUrl(url, pattern) {
   } catch {
     return false;
   }
+}
+
+function normalizeName(value) {
+  return (value || "").trim().toLowerCase();
+}
+
+function normalizeConfigList(list) {
+  return Array.isArray(list)
+    ? list.map((item) => ({ ...item, enabled: item.enabled !== false }))
+    : [];
+}
+
+function resolveScopedItems(parentItems, localItems, disabledNames) {
+  const parent = Array.isArray(parentItems) ? parentItems : [];
+  const local = Array.isArray(localItems) ? localItems : [];
+  const disabledSet = new Set(
+    (disabledNames || []).map((name) => normalizeName(name)).filter(Boolean)
+  );
+  const localNameSet = new Set(
+    local.map((item) => normalizeName(item.name)).filter(Boolean)
+  );
+  const inherited = parent.filter((item) => {
+    if (item?.enabled === false) return false;
+    const key = normalizeName(item?.name);
+    if (!key) return false;
+    if (localNameSet.has(key)) return false;
+    if (disabledSet.has(key)) return false;
+    return true;
+  });
+  const localEnabled = local.filter((item) => item?.enabled !== false);
+  return [...inherited, ...localEnabled];
+}
+
+function resolveEffectiveList(globalItems, workspace, site, listKey, disabledKey) {
+  const workspaceItems = workspace?.[listKey] || [];
+  const workspaceDisabled = workspace?.disabledInherited?.[disabledKey] || [];
+  const workspaceEffective = resolveScopedItems(
+    globalItems,
+    workspaceItems,
+    workspaceDisabled
+  );
+  const siteItems = site?.[listKey] || [];
+  const siteDisabled = site?.disabledInherited?.[disabledKey] || [];
+  return resolveScopedItems(workspaceEffective, siteItems, siteDisabled);
+}
+
+function filterApiConfigsForScope(apiConfigs, workspace, site) {
+  const workspaceDisabled = workspace?.disabledInherited?.apiConfigs || [];
+  const siteDisabled = site?.disabledInherited?.apiConfigs || [];
+  const workspaceFiltered = apiConfigs.filter(
+    (config) =>
+      config?.enabled !== false && !workspaceDisabled.includes(config.id)
+  );
+  return workspaceFiltered.filter(
+    (config) => !siteDisabled.includes(config.id)
+  );
 }
 
 async function detectSite(url) {
@@ -82,7 +145,13 @@ async function detectSite(url) {
   const site = sites.find(s => matchUrl(url, s.urlPattern));
   if (site) {
     state.currentSite = site;
-    state.currentWorkspace = workspaces.find(w => w.id === site.workspaceId) || { name: "Global", id: "global" };
+    const workspace =
+      workspaces.find((entry) => entry.id === site.workspaceId) || null;
+    state.currentWorkspace = workspace || {
+      name: "Global",
+      id: "global",
+      disabledInherited: {}
+    };
     currentWorkspaceName.textContent = state.currentWorkspace.name;
     switchState("normal");
     return true;
@@ -552,40 +621,88 @@ async function loadConfig() {
     "tasks",
     "envConfigs",
     "profiles",
+    "shortcuts",
+    "workspaces",
+    "sites",
     LAST_TASK_KEY,
     LAST_ENV_KEY,
     LAST_PROFILE_KEY
   ]);
-  const tasks = Array.isArray(stored.tasks) ? stored.tasks : [];
-  const envs = Array.isArray(stored.envConfigs) ? stored.envConfigs : [];
-  const profiles = Array.isArray(stored.profiles) ? stored.profiles : [];
-  renderTasks(tasks);
-  renderEnvironments(envs);
-  renderProfiles(profiles);
+  const tasks = normalizeConfigList(stored.tasks);
+  const envs = normalizeConfigList(stored.envConfigs);
+  const profiles = normalizeConfigList(stored.profiles);
+  const shortcuts = normalizeConfigList(stored.shortcuts);
+  const sites = Array.isArray(stored.sites) ? stored.sites : state.sites;
+  const workspaces = Array.isArray(stored.workspaces)
+    ? stored.workspaces
+    : state.workspaces;
+  state.sites = sites;
+  state.workspaces = workspaces;
 
-  if (!tasks.length) {
+  const activeSite = state.currentSite
+    ? sites.find((entry) => entry.id === state.currentSite.id)
+    : null;
+  const activeWorkspace =
+    activeSite && activeSite.workspaceId
+      ? workspaces.find((entry) => entry.id === activeSite.workspaceId)
+      : null;
+  if (activeWorkspace) {
+    state.currentWorkspace = activeWorkspace;
+    currentWorkspaceName.textContent = activeWorkspace.name || "Global";
+  }
+
+  const effectiveEnvs = resolveEffectiveList(
+    envs,
+    activeWorkspace,
+    activeSite,
+    "envConfigs",
+    "envs"
+  );
+  const effectiveProfiles = resolveEffectiveList(
+    profiles,
+    activeWorkspace,
+    activeSite,
+    "profiles",
+    "profiles"
+  );
+  const effectiveTasks = resolveEffectiveList(
+    tasks,
+    activeWorkspace,
+    activeSite,
+    "tasks",
+    "tasks"
+  );
+
+  renderTasks(effectiveTasks);
+  renderEnvironments(effectiveEnvs);
+  renderProfiles(effectiveProfiles);
+
+  if (!effectiveTasks.length) {
     state.selectedTaskId = "";
-    setEnvironmentSelection(envs[0]?.id || "");
-    setProfileSelection(profiles[0]?.id || "");
+    setEnvironmentSelection(effectiveEnvs[0]?.id || "");
+    setProfileSelection(effectiveProfiles[0]?.id || "");
     return;
   }
 
   const storedTaskId = stored[LAST_TASK_KEY];
   const storedEnvId = stored[LAST_ENV_KEY];
   const storedProfileId = stored[LAST_PROFILE_KEY];
-  const initialTaskId = tasks.some((task) => task.id === storedTaskId)
+  const initialTaskId = effectiveTasks.some((task) => task.id === storedTaskId)
     ? storedTaskId
-    : tasks[0].id;
+    : effectiveTasks[0].id;
   selectTask(initialTaskId, { resetEnv: false });
 
-  const task = tasks.find((item) => item.id === initialTaskId);
-  if (storedEnvId && envs.some((env) => env.id === storedEnvId)) {
+  const task = effectiveTasks.find((item) => item.id === initialTaskId);
+  if (storedEnvId && effectiveEnvs.some((env) => env.id === storedEnvId)) {
     setEnvironmentSelection(storedEnvId);
   } else {
     setEnvironmentSelection(getTaskDefaultEnvId(task));
   }
 
-  if (storedProfileId && profiles.some((profile) => profile.id === storedProfileId)) {
+  if (
+    storedProfileId &&
+    effectiveProfiles.some((profile) => profile.id === storedProfileId)
+  ) {
     setProfileSelection(storedProfileId);
   } else {
     setProfileSelection(getTaskDefaultProfileId(task));
@@ -652,8 +769,6 @@ async function handleAnalyze() {
     activeApiKeyId = "",
     apiConfigs = [],
     activeApiConfigId = "",
-    envConfigs = [],
-    profiles = [],
     apiBaseUrl,
     apiKeyHeader,
     apiKeyPrefix,
@@ -665,8 +780,6 @@ async function handleAnalyze() {
     "activeApiKeyId",
     "apiConfigs",
     "activeApiConfigId",
-    "envConfigs",
-    "profiles",
     "apiBaseUrl",
     "apiKeyHeader",
     "apiKeyPrefix",
@@ -675,9 +788,13 @@ async function handleAnalyze() {
     "resume"
   ]);
 
-  const resolvedConfigs = Array.isArray(apiConfigs) ? apiConfigs : [];
-  const resolvedEnvs = Array.isArray(envConfigs) ? envConfigs : [];
-  const resolvedProfiles = Array.isArray(profiles) ? profiles : [];
+  const resolvedConfigs = filterApiConfigsForScope(
+    normalizeConfigList(apiConfigs),
+    state.currentWorkspace,
+    state.currentSite
+  );
+  const resolvedEnvs = Array.isArray(state.envs) ? state.envs : [];
+  const resolvedProfiles = Array.isArray(state.profiles) ? state.profiles : [];
   const selectedEnvId = envSelect.value;
   const activeEnv =
     resolvedEnvs.find((entry) => entry.id === selectedEnvId) ||
@@ -711,7 +828,9 @@ async function handleAnalyze() {
   const resolvedApiKeyPrefix = activeConfig?.apiKeyPrefix ?? apiKeyPrefix ?? "";
   const resolvedModel = activeConfig?.model || model || "";
 
-  const resolvedKeys = Array.isArray(apiKeys) ? apiKeys : [];
+  const resolvedKeys = normalizeConfigList(apiKeys).filter(
+    (key) => key.enabled !== false
+  );
   const resolvedKeyId =
     activeConfig?.apiKeyId || activeApiKeyId || resolvedKeys[0]?.id || "";
   const activeKey = resolvedKeys.find((entry) => entry.id === resolvedKeyId);
@@ -926,13 +1045,66 @@ updateSiteTextCount();
 updatePromptCount(0);
 renderOutput();
 setAnalyzing(false);
-loadConfig();
-loadTheme();
+void loadTheme();
 
 async function loadSavedOutput() {
   const stored = await getStorage([OUTPUT_STORAGE_KEY]);
   state.outputRaw = stored[OUTPUT_STORAGE_KEY] || "";
   renderOutput();
+}
+
+async function loadShortcutRunRequest() {
+  const stored = await getStorage([
+    SHORTCUT_RUN_KEY,
+    "shortcuts",
+    "workspaces",
+    "sites"
+  ]);
+  const shortcutId = stored[SHORTCUT_RUN_KEY];
+  if (!shortcutId) return;
+
+  state.shortcutRunPending = true;
+  await chrome.storage.local.remove(SHORTCUT_RUN_KEY);
+
+  const globalShortcuts = normalizeConfigList(stored.shortcuts);
+  const sites = Array.isArray(stored.sites) ? stored.sites : state.sites;
+  const workspaces = Array.isArray(stored.workspaces)
+    ? stored.workspaces
+    : state.workspaces;
+  const activeSite = state.currentSite
+    ? sites.find((entry) => entry.id === state.currentSite.id)
+    : null;
+  const activeWorkspace =
+    activeSite && activeSite.workspaceId
+      ? workspaces.find((entry) => entry.id === activeSite.workspaceId)
+      : null;
+  const effectiveShortcuts = resolveEffectiveList(
+    globalShortcuts,
+    activeWorkspace,
+    activeSite,
+    "shortcuts",
+    "shortcuts"
+  );
+  const shortcut = effectiveShortcuts.find((item) => item.id === shortcutId);
+  if (!shortcut) {
+    setStatus("Shortcut not found.");
+    state.shortcutRunPending = false;
+    return;
+  }
+
+  if (shortcut.taskId) {
+    selectTask(shortcut.taskId, { resetEnv: true });
+  }
+  if (shortcut.envId) {
+    setEnvironmentSelection(shortcut.envId);
+  }
+  if (shortcut.profileId) {
+    setProfileSelection(shortcut.profileId);
+  }
+  await persistSelections();
+  state.autoRunPending = false;
+  state.shortcutRunPending = false;
+  void handleExtractAndAnalyze();
 }
 
 async function loadAutoRunRequest() {
@@ -945,6 +1117,7 @@ async function loadAutoRunRequest() {
 }
 
 function maybeRunDefaultTask() {
+  if (state.shortcutRunPending) return;
   if (!state.autoRunPending) return;
   if (state.isAnalyzing) return;
   if (!state.tasks.length) return;
@@ -954,8 +1127,14 @@ function maybeRunDefaultTask() {
   void handleExtractAndAnalyze();
 }
 
-loadSavedOutput();
-loadAutoRunRequest();
+async function init() {
+  await loadConfig();
+  await loadShortcutRunRequest();
+  await loadAutoRunRequest();
+}
+
+void init();
+void loadSavedOutput();
 ensurePort();
 
 chrome.storage.onChanged.addListener((changes) => {
@@ -963,6 +1142,10 @@ chrome.storage.onChanged.addListener((changes) => {
     state.autoRunPending = true;
     void chrome.storage.local.remove(AUTO_RUN_KEY);
     maybeRunDefaultTask();
+  }
+
+  if (changes[SHORTCUT_RUN_KEY]?.newValue) {
+    void loadShortcutRunRequest();
   }
 
   if (changes[OUTPUT_STORAGE_KEY]?.newValue !== undefined) {

@@ -13,7 +13,7 @@
     </header>
     <div class="page-bar">
       <div id="status" class="status"></div>
-      <button id="saveBtn" class="accent">Save Settings</button>
+      <button id="saveBtn" class="accent" type="button">Save Settings</button>
     </div>
 
     <div class="settings-layout">
@@ -28,27 +28,28 @@
               <div class="toc-item">
                 <span class="toc-caret">▸</span> <a href="#global-config-panel">Global Configuration</a>
               </div>
-              <ul class="toc-sub hidden">
+              <ul class="toc-sub">
                 <li><a href="#appearance-panel">Appearance</a></li>
                 <li><a href="#api-keys-panel">API Keys</a></li>
                 <li><a href="#api-panel">API</a></li>
                 <li><a href="#environment-panel">Environments</a></li>
                 <li><a href="#profiles-panel">Profiles</a></li>
                 <li><a href="#tasks-panel">Tasks</a></li>
-                <li><a href="#presets-panel">Presets</a></li>
+                <li><a href="#shortcuts-panel">Toolbar Shortcuts</a></li>
+                <li><a href="#global-sites-panel">Sites</a></li>
               </ul>
             </li>
             <li>
               <div class="toc-item">
                 <span class="toc-caret">▸</span> <a href="#workspaces-panel">Workspaces</a>
               </div>
-              <ul class="toc-sub hidden" id="toc-workspaces-list"></ul>
+              <ul class="toc-sub" id="toc-workspaces-list"></ul>
             </li>
             <li>
               <div class="toc-item">
                 <span class="toc-caret">▸</span> <a href="#sites-panel">Sites</a>
               </div>
-              <ul class="toc-sub hidden" id="toc-sites-list"></ul>
+              <ul class="toc-sub" id="toc-sites-list"></ul>
             </li>
           </ul>
         </div>
@@ -83,6 +84,12 @@
                 <option value="top-left">Top Left</option>
                 <option value="bottom-center">Bottom Center</option>
               </select>
+            </div>
+            <div class="field">
+              <label class="toggle-label">
+                <input id="toolbarAutoHide" type="checkbox" />
+                Auto-hide toolbar on unknown sites
+              </label>
             </div>
           </div>
         </details>
@@ -168,20 +175,33 @@
           </div>
         </details>
 
-        <!-- Presets -->
-        <details class="panel sub-panel" id="presets-panel">
+        <!-- Toolbar Shortcuts -->
+        <details class="panel sub-panel" id="shortcuts-panel">
           <summary class="panel-summary">
             <div class="row-title">
-              <h2>PRESETS</h2>
-              <span class="hint hint-accent">Toolbar shortcuts</span>
+              <h2>TOOLBAR SHORTCUTS</h2>
+              <span class="hint hint-accent">One-click toolbar runs</span>
             </div>
           </summary>
           <div class="panel-body">
             <div class="row">
               <div></div>
-              <button id="addPresetBtn" class="ghost" type="button">Add Preset</button>
+              <button id="addShortcutBtn" class="ghost" type="button">Add Shortcut</button>
             </div>
-            <div id="presets" class="presets"></div>
+            <div id="shortcuts" class="shortcuts"></div>
+          </div>
+        </details>
+
+        <!-- Sites -->
+        <details class="panel sub-panel" id="global-sites-panel">
+          <summary class="panel-summary">
+            <div class="row-title">
+              <h2>SITES</h2>
+              <span class="hint hint-accent">Inherit directly from global</span>
+            </div>
+          </summary>
+          <div class="panel-body">
+            <div id="globalSites" class="sites-list"></div>
           </div>
         </details>
       </div>

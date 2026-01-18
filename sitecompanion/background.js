@@ -1,17 +1,4 @@
-const DEFAULT_TASKS = [
-  {
-    id: "task-generic-fit",
-    name: "Generic Fit",
-    text:
-      "You should evaluate for my fit to the job. You don't need to suggest interview prep, we'll leave those for later. a bit of tuning to your answers: please keep things more compact, a single section for the evaluation is enough, you don't need to analyze every bullet point in the posting."
-  },
-  {
-    id: "task-ratings-only",
-    name: "Ratings Only",
-    text:
-      "Give ratings out of 10 with headings and do not include any other text.\n\n1. Fit evaluation: my fit to the role.\n2. Company status: how well this company offers career development for me.\n3. Pay: use $25 CAD per hour as a baseline; rate the compensation."
-  }
-];
+const DEFAULT_TASKS = [];
 
 const DEFAULT_SETTINGS = {
   apiKey: "",
@@ -25,9 +12,8 @@ const DEFAULT_SETTINGS = {
   apiBaseUrl: "https://api.openai.com/v1",
   apiKeyHeader: "Authorization",
   apiKeyPrefix: "Bearer ",
-  model: "gpt-4o-mini",
-  systemPrompt:
-    "You are a precise, honest assistant. Be concise and avoid inventing details, be critical about evaluations. You should put in a small summary of all the sections at the end. You should answer in no longer than 3 sections including the summary. And remember to bold or italicize key points.",
+  model: "gpt-5.2",
+  systemPrompt: "",
   tasks: DEFAULT_TASKS,
   shortcuts: [],
   theme: "system",

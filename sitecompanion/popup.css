@@ -275,6 +275,11 @@ button:active {
   color: var(--accent-deep);
 }
 
+.helper-text {
+  font-size: 11px;
+  color: var(--accent-deep);
+}
+
 .output {
   margin-top: 8px;
   border: 1px dashed var(--border);

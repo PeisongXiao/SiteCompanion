@@ -24,6 +24,8 @@ const unknownSiteState = document.getElementById("unknownSiteState");
 const extractionReviewState = document.getElementById("extractionReviewState");
 const normalExecutionState = document.getElementById("normalExecutionState");
 const partialTextPaste = document.getElementById("partialTextPaste");
+const minimalExtractStatus = document.getElementById("minimalExtractStatus");
+const extractMinimalBtn = document.getElementById("extractMinimalBtn");
 const extractFullBtn = document.getElementById("extractFullBtn");
 const extractedPreview = document.getElementById("extractedPreview");
 const siteNameInput = document.getElementById("siteNameInput");
@@ -49,7 +51,7 @@ const state = {
   currentPopupState: "unknown",
   globalTheme: "system",
   forcedTask: null,
-  siteTextSelector: "",
+  siteTextTarget: null,
   selectedTaskId: "",
   selectedEnvId: "",
   selectedProfileId: ""
@@ -68,6 +70,7 @@ async function switchState(stateName) {
   } else if (stateName === "normal") {
     normalExecutionState.classList.remove("hidden");
   }
+  setMinimalStatus("");
   await chrome.storage.local.set({ lastPopupState: stateName });
 }
 
@@ -77,7 +80,7 @@ function buildPopupDraft() {
     siteText: state.siteText || "",
     urlPattern: urlPatternInput?.value?.trim() || "",
     siteName: siteNameInput?.value?.trim() || "",
-    siteTextSelector: state.siteTextSelector || ""
+    siteTextTarget: state.siteTextTarget
   };
 }
 
@@ -101,8 +104,10 @@ function applyPopupDraft(draft) {
   if (typeof draft.siteName === "string") {
     siteNameInput.value = draft.siteName;
   }
-  if (typeof draft.siteTextSelector === "string") {
-    state.siteTextSelector = draft.siteTextSelector;
+  if (draft.siteTextTarget) {
+    state.siteTextTarget = draft.siteTextTarget;
+  } else if (typeof draft.siteTextSelector === "string") {
+    state.siteTextTarget = { kind: "css", selector: draft.siteTextSelector };
   }
 }
 
@@ -125,6 +130,45 @@ function matchUrl(url, pattern) {
 
 function normalizeName(value) {
   return (value || "").trim().toLowerCase();
+}
+
+function escapeSelector(value) {
+  if (window.CSS && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function buildClassSelector(className) {
+  const parts = String(className || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "";
+  return parts.map((name) => `.${escapeSelector(name)}`).join("");
+}
+
+function parseLegacyDomSelectorString(rawValue) {
+  const trimmed = String(rawValue || "").trim();
+  if (!trimmed) return null;
+  const classMatch = trimmed.match(
+    /^(?:document\.)?getElementsByClassName\(\s*(['"])(.+?)\1\s*\)\s*\[\s*(\d+)\s*\]\s*(?:\.innerText\s*)?;?$/i
+  );
+  if (classMatch) {
+    const selector = buildClassSelector(classMatch[2]);
+    if (!selector) {
+      return { target: null, error: "Missing extraction target." };
+    }
+    const index = Number.parseInt(classMatch[3], 10);
+    if (!Number.isInteger(index) || index < 0) {
+      return { target: null, error: "Invalid index." };
+    }
+    return { target: { kind: "cssAll", selector, index }, error: null };
+  }
+  if (trimmed.includes("getElementsByClassName")) {
+    return { target: null, error: "Unsupported extraction target." };
+  }
+  return null;
 }
 
 function normalizeConfigList(list) {
@@ -181,6 +225,26 @@ function resolveEffectiveList(globalItems, workspace, site, listKey, disabledKey
   return resolveScopedItems(workspaceEffective, siteItems, siteDisabled);
 }
 
+function normalizeStoredExtractTarget(site) {
+  if (!site || typeof site !== "object") return null;
+  const direct = site.extractTarget;
+  if (direct && typeof direct === "object" && typeof direct.kind === "string") {
+    return direct;
+  }
+  if (typeof direct === "string" && direct.trim()) {
+    const legacy = parseLegacyDomSelectorString(direct);
+    if (legacy?.target) return legacy.target;
+    return { kind: "css", selector: direct.trim() };
+  }
+  const legacy = site.extractSelector;
+  if (typeof legacy === "string" && legacy.trim()) {
+    const parsedLegacy = parseLegacyDomSelectorString(legacy);
+    if (parsedLegacy?.target) return parsedLegacy.target;
+    return { kind: "css", selector: legacy.trim() };
+  }
+  return null;
+}
+
 function filterApiConfigsForScope(apiConfigs, workspace, site) {
   const workspaceDisabled = workspace?.disabledInherited?.apiConfigs || [];
   const siteDisabled = site?.disabledInherited?.apiConfigs || [];
@@ -197,7 +261,7 @@ async function detectSite(url) {
   const { sites = [], workspaces = [] } = await getStorage(["sites", "workspaces"]);
   const normalizedSites = (Array.isArray(sites) ? sites : []).map((site) => ({
     ...site,
-    extractSelector: site?.extractSelector || "body"
+    extractTarget: normalizeStoredExtractTarget(site)
   }));
   state.sites = normalizedSites;
   state.workspaces = workspaces;
@@ -431,6 +495,12 @@ function persistOutputNow() {
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function setMinimalStatus(message) {
+  if (!minimalExtractStatus) return;
+  minimalExtractStatus.textContent = message || "";
+  minimalExtractStatus.classList.toggle("hidden", !message);
 }
 
 function applyTheme(theme) {
@@ -704,17 +774,24 @@ async function loadConfig() {
   const envs = normalizeConfigList(stored.envConfigs);
   const profiles = normalizeConfigList(stored.profiles);
   const shortcuts = normalizeConfigList(stored.shortcuts);
+  let needsSiteUpdate = false;
   const sites = Array.isArray(stored.sites)
-    ? stored.sites.map((site) => ({
-        ...site,
-        extractSelector: site?.extractSelector || "body"
-      }))
+    ? stored.sites.map((site) => {
+        const target = normalizeStoredExtractTarget(site);
+        if (site?.extractSelector || typeof site?.extractTarget === "string") {
+          needsSiteUpdate = true;
+        }
+        return { ...site, extractTarget: target };
+      })
     : state.sites;
   const workspaces = Array.isArray(stored.workspaces)
     ? stored.workspaces
     : state.workspaces;
   state.sites = sites;
   state.workspaces = workspaces;
+  if (needsSiteUpdate) {
+    await chrome.storage.local.set({ sites });
+  }
 
   const activeSite = state.currentSite
     ? sites.find((entry) => entry.id === state.currentSite.id)
@@ -812,10 +889,14 @@ async function loadTheme() {
 async function handleExtract() {
   setStatus("Extracting...");
   try {
-    const selector = state.currentSite?.extractSelector || "body";
+    const target = normalizeStoredExtractTarget(state.currentSite);
+    if (!target) {
+      setStatus("Missing extraction target.");
+      return false;
+    }
     const response = await sendToActiveTab({
       type: "EXTRACT_BY_SELECTOR",
-      selector
+      target
     });
     if (!response?.ok) {
       setStatus(response?.error || "No text detected.");
@@ -823,7 +904,7 @@ async function handleExtract() {
     }
 
     state.siteText = response.extracted || "";
-    state.siteTextSelector = response.selector || selector;
+    state.siteTextTarget = response.target || target;
     updateSiteTextCount();
     updatePromptCount(0);
     setStatus("Text extracted.");
@@ -1045,45 +1126,70 @@ async function fillSiteDefaultsFromTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs[0]?.url) return;
   const url = new URL(tabs[0].url);
-  urlPatternInput.value = url.hostname + url.pathname + "*";
+  urlPatternInput.value = `${url.hostname}/*`;
   if (!siteNameInput.value.trim()) {
     siteNameInput.value = url.hostname;
   }
 }
 
-partialTextPaste.addEventListener("input", async () => {
-  const text = partialTextPaste.value.trim();
-  if (text.length < 5) return;
+async function runMinimalExtraction(text, minLength = 5) {
+  const trimmed = (text || "").trim();
+  if (trimmed.length < minLength) {
+    setMinimalStatus("Paste more text to extract.");
+    return false;
+  }
 
   setStatus("Finding scope...");
   try {
-    const response = await sendToActiveTab({ type: "FIND_SCOPE", text });
+    const response = await sendToActiveTab({ type: "FIND_SCOPE", text: trimmed });
     if (response?.ok) {
       state.siteText = response.extracted;
-      state.siteTextSelector = response.selector || "";
+      state.siteTextTarget = response.target || { kind: "textScope", text: trimmed };
       extractedPreview.textContent = state.siteText;
       await fillSiteDefaultsFromTab();
       switchState("review");
       await persistPopupDraft();
+      setMinimalStatus("");
       setStatus("Review extraction.");
+      return true;
     }
+    setMinimalStatus(response?.error || "Text could not be matched.");
+    return false;
   } catch (error) {
-    setStatus("Error finding scope.");
+    setMinimalStatus(error?.message || "Error finding scope.");
+    return false;
+  }
+}
+
+partialTextPaste.addEventListener("input", () => {
+  if (state.currentPopupState === "unknown") {
+    void persistPopupDraft();
+    setMinimalStatus("");
   }
 });
 
+extractMinimalBtn?.addEventListener("click", async () => {
+  await runMinimalExtraction(partialTextPaste.value, 1);
+});
+
 extractFullBtn.addEventListener("click", async () => {
+  setMinimalStatus("");
   setStatus("Extracting full text...");
   try {
-    const response = await sendToActiveTab({ type: "EXTRACT_FULL" });
+    const response = await sendToActiveTab({
+      type: "EXTRACT_FULL"
+    });
     if (response?.ok) {
+      const target = response.target || { kind: "css", selector: "body" };
       state.siteText = response.extracted;
-      state.siteTextSelector = response.selector || "body";
+      state.siteTextTarget = target;
       extractedPreview.textContent = state.siteText;
       await fillSiteDefaultsFromTab();
       switchState("review");
       await persistPopupDraft();
       setStatus("Review extraction.");
+    } else {
+      setStatus(response?.error || "Error extracting text.");
     }
   } catch (error) {
     setStatus("Error extracting text.");
@@ -1107,7 +1213,8 @@ retryExtractBtn.addEventListener("click", () => {
   urlPatternInput.value = "";
   siteNameInput.value = "";
   state.siteText = "";
-  state.siteTextSelector = "";
+  state.siteTextTarget = null;
+  setMinimalStatus("");
   void clearPopupDraft();
   setStatus("Ready.");
 });
@@ -1123,6 +1230,10 @@ confirmSiteBtn.addEventListener("click", async () => {
     setStatus("Enter a URL pattern.");
     return;
   }
+  if (!state.siteTextTarget) {
+    setStatus("Missing extraction target.");
+    return;
+  }
 
   // AGENTS.md: No URL pattern may be a substring of another.
   const conflict = state.sites.find(s => s.urlPattern.includes(pattern) || pattern.includes(s.urlPattern));
@@ -1136,7 +1247,7 @@ confirmSiteBtn.addEventListener("click", async () => {
     name,
     urlPattern: pattern,
     workspaceId: "global", // Default to global for now
-    extractSelector: state.siteTextSelector || "body"
+    extractTarget: state.siteTextTarget
   };
 
   state.sites.push(newSite);

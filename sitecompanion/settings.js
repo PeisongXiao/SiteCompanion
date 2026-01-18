@@ -29,10 +29,204 @@ const OPENAI_DEFAULTS = {
   apiKeyHeader: "Authorization",
   apiKeyPrefix: "Bearer "
 };
-const DEFAULT_MODEL = "gpt-4o-mini";
-const DEFAULT_SYSTEM_PROMPT =
-  "You are a precise, honest assistant. Be concise and avoid inventing details, be critical about evaluations. You should put in a small summary of all the sections at the end. You should answer in no longer than 3 sections including the summary. And remember to bold or italicize key points.";
+const DEFAULT_MODEL = "gpt-5.2";
+const DEFAULT_SYSTEM_PROMPT = "";
 const SIDEBAR_WIDTH_KEY = "sidebarWidth";
+
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function escapeSelector(value) {
+  if (window.CSS && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function buildClassSelector(className) {
+  const parts = String(className || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "";
+  return parts.map((name) => `.${escapeSelector(name)}`).join("");
+}
+
+function parseLegacyDomSelectorString(rawValue) {
+  const trimmed = String(rawValue || "").trim();
+  if (!trimmed) return null;
+  const classMatch = trimmed.match(
+    /^(?:document\.)?getElementsByClassName\(\s*(['"])(.+?)\1\s*\)\s*\[\s*(\d+)\s*\]\s*(?:\.innerText\s*)?;?$/i
+  );
+  if (classMatch) {
+    const selector = buildClassSelector(classMatch[2]);
+    if (!selector) {
+      return { target: null, error: "Missing extraction target." };
+    }
+    const index = Number.parseInt(classMatch[3], 10);
+    if (!Number.isInteger(index) || index < 0) {
+      return { target: null, error: "Invalid index." };
+    }
+    return { target: { kind: "cssAll", selector, index }, error: null };
+  }
+  if (trimmed.includes("getElementsByClassName")) {
+    return { target: null, error: "Unsupported extraction target." };
+  }
+  return null;
+}
+
+function parseLooseJsonInput(rawValue) {
+  const trimmed = String(rawValue || "").trim();
+  if (!trimmed.startsWith("{")) return null;
+  let normalized = trimmed;
+  normalized = normalized.replace(
+    /([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g,
+    '$1"$2"$3'
+  );
+  normalized = normalized.replace(
+    /'([^'\\]*(?:\\.[^'\\]*)*)'/g,
+    (_match, value) => `"${value.replace(/"/g, '\\"')}"`
+  );
+  return normalized;
+}
+
+function normalizeExtractionTargetValue(value) {
+  if (typeof value === "string") {
+    const legacy = parseLegacyDomSelectorString(value);
+    if (legacy) {
+      return legacy.target;
+    }
+    const trimmed = value.trim();
+    return trimmed ? { kind: "css", selector: trimmed } : null;
+  }
+  if (isPlainObject(value) && typeof value.kind === "string") {
+    return value;
+  }
+  return null;
+}
+
+function serializeExtractionTarget(target) {
+  if (!target) return "";
+  if (typeof target === "string") {
+    const legacy = parseLegacyDomSelectorString(target);
+    if (legacy?.target) return JSON.stringify(legacy.target);
+    const trimmed = target.trim();
+    if (!trimmed) return "";
+    return JSON.stringify({ kind: "css", selector: trimmed });
+  }
+  if (isPlainObject(target) && typeof target.kind === "string") {
+    return JSON.stringify(target);
+  }
+  return "";
+}
+
+function validateExtractionTarget(target) {
+  if (!target || typeof target !== "object") {
+    return "Missing extraction target.";
+  }
+  if (target.kind === "xpath") {
+    return "XPath not supported.";
+  }
+  if (target.kind === "css") {
+    return typeof target.selector === "string" && target.selector.trim()
+      ? null
+      : "Missing extraction target.";
+  }
+  if (target.kind === "cssAll") {
+    if (typeof target.selector !== "string" || !target.selector.trim()) {
+      return "Missing extraction target.";
+    }
+    if (!Number.isInteger(target.index) || target.index < 0) {
+      return "Invalid index.";
+    }
+    return null;
+  }
+  if (target.kind === "textScope") {
+    return typeof target.text === "string" && target.text.trim()
+      ? null
+      : "Missing extraction target.";
+  }
+  if (target.kind === "anchoredCss") {
+    const anchor = target.anchor;
+    if (!anchor || anchor.kind !== "textScope") {
+      return "Invalid anchor target.";
+    }
+    if (typeof anchor.text !== "string" || !anchor.text.trim()) {
+      return "Missing extraction target.";
+    }
+    if (typeof target.selector !== "string" || !target.selector.trim()) {
+      return "Missing extraction target.";
+    }
+    return null;
+  }
+  return "Unsupported extraction target.";
+}
+
+function parseExtractionTargetInput(rawValue) {
+  const trimmed = (rawValue || "").trim();
+  if (!trimmed) {
+    return { target: null, error: "Missing extraction target." };
+  }
+  const legacy = parseLegacyDomSelectorString(trimmed);
+  if (legacy) {
+    if (legacy.error) {
+      return { target: null, error: legacy.error };
+    }
+    const error = validateExtractionTarget(legacy.target);
+    return { target: legacy.target, error };
+  }
+  if (trimmed.startsWith("textScope:")) {
+    const text = trimmed.slice("textScope:".length).trim();
+    const target = { kind: "textScope", text };
+    const error = validateExtractionTarget(target);
+    return { target, error };
+  }
+  let target = null;
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      target = normalizeExtractionTargetValue(parsed);
+    } catch {
+      const normalized = parseLooseJsonInput(trimmed);
+      if (!normalized) {
+        return { target: null, error: "Invalid extraction target JSON." };
+      }
+      try {
+        const parsed = JSON.parse(normalized);
+        target = normalizeExtractionTargetValue(parsed);
+      } catch {
+        return { target: null, error: "Invalid extraction target JSON." };
+      }
+    }
+  } else {
+    target = { kind: "css", selector: trimmed };
+  }
+  if (!target) {
+    return { target: null, error: "Invalid extraction target." };
+  }
+  const error = validateExtractionTarget(target);
+  return { target, error };
+}
+
+function normalizeStoredExtractionTarget(site) {
+  const normalized = normalizeExtractionTargetValue(site?.extractTarget);
+  if (normalized) {
+    const changed = typeof site?.extractTarget === "string";
+    return { target: normalized, changed };
+  }
+  if (typeof site?.extractSelector === "string" && site.extractSelector.trim()) {
+    const legacy = parseLegacyDomSelectorString(site.extractSelector);
+    if (legacy?.target) {
+      return { target: legacy.target, changed: true };
+    }
+    return {
+      target: { kind: "css", selector: site.extractSelector.trim() },
+      changed: true
+    };
+  }
+  return { target: null, changed: false };
+}
 
 function getSidebarWidthLimits() {
   const min = 160;
@@ -2481,6 +2675,7 @@ function collectSites() {
     const patternInput = card.querySelector(".site-pattern");
     const workspaceSelect = card.querySelector(".site-workspace");
     const extractInput = card.querySelector(".site-extract-selector");
+    const parsedTarget = parseExtractionTargetInput(extractInput?.value || "");
     const themeSelect = card.querySelector(".appearance-theme");
     const toolbarSelect = card.querySelector(".appearance-toolbar-position");
     const envsContainer = card.querySelector(".site-envs");
@@ -2497,7 +2692,7 @@ function collectSites() {
       name: (nameInput?.value || "").trim(),
       urlPattern: (patternInput?.value || "").trim(),
       workspaceId: workspaceSelect?.value || "global",
-      extractSelector: (extractInput?.value || "").trim(),
+      extractTarget: parsedTarget.target,
       theme: themeSelect?.value || "inherit",
       toolbarPosition: toolbarSelect?.value || "inherit",
       envConfigs: envsContainer ? collectEnvConfigs(envsContainer) : [],
@@ -2619,7 +2814,7 @@ function buildSiteCard(site, allWorkspaces = []) {
   extractLabel.textContent = "Site Text Selector";
   const extractInput = document.createElement("input");
   extractInput.type = "text";
-  extractInput.value = site.extractSelector || "";
+  extractInput.value = serializeExtractionTarget(site.extractTarget);
   extractInput.className = "site-extract-selector";
   extractInput.placeholder = "body";
   extractInput.addEventListener("input", () => {
@@ -3203,6 +3398,11 @@ function updateSidebarErrors() {
       ".shortcut-name",
       `${label} shortcuts`
     );
+    const extractInput = card.querySelector(".site-extract-selector");
+    const { error } = parseExtractionTargetInput(extractInput?.value || "");
+    if (error) {
+      errors.push(`${label} site text selector: ${error}`);
+    }
   });
 
   checkNameInputs(sitesContainer, ".site-name", "Sites");
@@ -3408,13 +3608,18 @@ async function loadSettings() {
   }
 
   if (Array.isArray(sites)) {
+    let needsSiteUpdate = false;
     sites = sites.map((site) => {
       if (!site || typeof site !== "object") return site;
+      const normalizedTarget = normalizeStoredExtractionTarget(site);
+      if (normalizedTarget.changed) {
+        needsSiteUpdate = true;
+      }
       return {
         ...site,
         name: site.name || site.urlPattern || "",
         workspaceId: site.workspaceId || "global",
-        extractSelector: typeof site.extractSelector === "string" ? site.extractSelector : "",
+        extractTarget: normalizedTarget.target,
         theme: site.theme || "inherit",
         toolbarPosition: site.toolbarPosition || "inherit",
         envConfigs: normalizeConfigList(site.envConfigs),
@@ -3424,6 +3629,9 @@ async function loadSettings() {
         disabledInherited: normalizeDisabledInherited(site.disabledInherited)
       };
     });
+    if (needsSiteUpdate) {
+      await chrome.storage.local.set({ sites });
+    }
   }
 
   // Load basic resources first so they are available for shortcuts/workspaces

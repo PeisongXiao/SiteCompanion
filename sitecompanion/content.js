@@ -1,11 +1,12 @@
 function findMinimumScope(text) {
   if (!text) return null;
-  const normalized = text.trim();
+  const normalized = normalizeWhitespace(text);
   if (!normalized) return null;
 
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
     acceptNode: (node) => {
-      if (node.innerText.includes(normalized)) {
+      const nodeText = normalizeWhitespace(node.innerText);
+      if (nodeText.includes(normalized)) {
         return NodeFilter.FILTER_ACCEPT;
       }
       return NodeFilter.FILTER_REJECT;
@@ -22,11 +23,276 @@ function findMinimumScope(text) {
   return deepest;
 }
 
+function normalizeWhitespace(value) {
+  return String(value || "")
+    .replace(/\r?\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function escapeSelector(value) {
   if (window.CSS && typeof CSS.escape === "function") {
     return CSS.escape(value);
   }
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function buildClassSelector(className) {
+  const parts = String(className || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "";
+  return parts.map((name) => `.${escapeSelector(name)}`).join("");
+}
+
+function inferCssAllTarget(node) {
+  if (!node || node.nodeType !== 1) return null;
+  const classList = node.classList ? Array.from(node.classList) : [];
+  let best = null;
+  for (const className of classList) {
+    if (!className) continue;
+    const matches = Array.from(document.getElementsByClassName(className));
+    const index = matches.indexOf(node);
+    if (index < 0) continue;
+    if (!best || matches.length < best.matches.length) {
+      best = { className, index, matches };
+    }
+  }
+  if (best) {
+    return {
+      kind: "cssAll",
+      selector: `.${escapeSelector(best.className)}`,
+      index: best.index
+    };
+  }
+  const className =
+    typeof node.className === "string" ? node.className.trim() : "";
+  if (!className) return null;
+  const selector = buildClassSelector(className);
+  if (!selector) return null;
+  const matches = Array.from(document.getElementsByClassName(className));
+  const index = matches.indexOf(node);
+  if (index < 0) return null;
+  return { kind: "cssAll", selector, index };
+}
+
+function inferCssTarget(node) {
+  if (!node || node.nodeType !== 1) return null;
+  const selector = buildSelector(node);
+  if (!selector) return null;
+  return { kind: "css", selector };
+}
+
+function inferAnchoredCssTarget(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  return {
+    kind: "anchoredCss",
+    anchor: { kind: "textScope", text: trimmed },
+    selector: ":scope"
+  };
+}
+
+function inferScopeTargets(text, node) {
+  const candidates = [];
+  const cssAll = inferCssAllTarget(node);
+  if (cssAll) candidates.push(cssAll);
+  const css = inferCssTarget(node);
+  if (css) candidates.push(css);
+  const anchoredCss = inferAnchoredCssTarget(text);
+  if (anchoredCss) candidates.push(anchoredCss);
+  const trimmed = String(text || "").trim();
+  if (trimmed) {
+    candidates.push({ kind: "textScope", text: trimmed });
+  }
+  return candidates;
+}
+
+function selectInferredTarget(text, node) {
+  const candidates = inferScopeTargets(text, node);
+  for (const candidate of candidates) {
+    const resolved = resolveExtractionTarget(candidate);
+    if (!resolved.error && resolved.node === node) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function findBestScopeCandidate(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (node) => {
+      if (node.innerText.includes(normalized)) {
+        return NodeFilter.FILTER_ACCEPT;
+      }
+      return NodeFilter.FILTER_REJECT;
+    }
+  });
+
+  let best = null;
+  let node = walker.nextNode();
+  while (node) {
+    if (node !== document.body) {
+      const cssAll = inferCssAllTarget(node);
+      if (cssAll) {
+        const resolved = resolveExtractionTarget(cssAll);
+        if (!resolved.error && resolved.node === node) {
+          const matchCount = document.querySelectorAll(cssAll.selector).length;
+          if (!best || matchCount < best.matchCount) {
+            best = { node, target: cssAll, matchCount };
+          }
+        }
+      }
+    }
+    node = walker.nextNode();
+  }
+  return best;
+}
+
+function parseLegacySelectorString(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return { error: "Missing extraction target." };
+  }
+  const classMatch = trimmed.match(
+    /^(?:document\.)?getElementsByClassName\(\s*(['"])(.+?)\1\s*\)\s*\[\s*(\d+)\s*\]\s*(?:\.innerText\s*)?;?$/i
+  );
+  if (classMatch) {
+    const selector = buildClassSelector(classMatch[2]);
+    if (!selector) {
+      return { error: "Missing extraction target." };
+    }
+    const index = Number.parseInt(classMatch[3], 10);
+    if (!Number.isInteger(index) || index < 0) {
+      return { error: "Invalid index." };
+    }
+    return {
+      target: { kind: "cssAll", selector, index }
+    };
+  }
+  if (trimmed.includes("getElementsByClassName")) {
+    return { error: "Unsupported extraction target." };
+  }
+  return null;
+}
+
+function normalizeExtractionTarget(input) {
+  if (!input) {
+    return { error: "Missing extraction target." };
+  }
+  if (typeof input === "string") {
+    const parsed = parseLegacySelectorString(input);
+    if (parsed) {
+      if (parsed.error) return { error: parsed.error };
+      return { target: parsed.target };
+    }
+    const selector = input.trim();
+    if (!selector) {
+      return { error: "Missing extraction target." };
+    }
+    return { target: { kind: "css", selector } };
+  }
+  if (!isPlainObject(input) || typeof input.kind !== "string") {
+    return { error: "Missing extraction target." };
+  }
+  return { target: input };
+}
+
+function resolveExtractionTarget(target) {
+  if (!target || typeof target !== "object") {
+    return { error: "Missing extraction target." };
+  }
+
+  if (target.kind === "xpath") {
+    return { error: "XPath not supported." };
+  }
+
+  if (target.kind === "textScope") {
+    if (typeof target.text !== "string" || !target.text.trim()) {
+      return { error: "Missing extraction target." };
+    }
+    const node = findMinimumScope(target.text);
+    if (!node) {
+      return { error: "Scope not found." };
+    }
+    return { node };
+  }
+
+  if (target.kind === "anchoredCss") {
+    const anchor = target.anchor;
+    if (
+      !anchor ||
+      anchor.kind !== "textScope" ||
+      typeof anchor.text !== "string" ||
+      !anchor.text.trim()
+    ) {
+      return { error: "Missing extraction target." };
+    }
+    const anchorNode = findMinimumScope(anchor.text);
+    if (!anchorNode) {
+      return { error: "Anchor scope not found." };
+    }
+    const selector = target.selector || "";
+    if (!selector.trim()) {
+      return { error: "Missing extraction target." };
+    }
+    let node = null;
+    try {
+      node = anchorNode.querySelector(selector);
+    } catch {
+      return { error: "Invalid selector." };
+    }
+    if (!node) {
+      return { error: "Selector matched no elements." };
+    }
+    return { node };
+  }
+
+  if (target.kind === "css" || target.kind === "cssAll") {
+    const selector = target.selector || "";
+    if (!selector) {
+      return { error: "Missing extraction target." };
+    }
+    if (target.kind === "css") {
+      let node = null;
+      try {
+        node = document.querySelector(selector);
+      } catch {
+        return { error: "Invalid selector." };
+      }
+      if (!node) {
+        return { error: "Selector matched no elements." };
+      }
+      return { node };
+    }
+    const index = target.index;
+    if (!Number.isInteger(index) || index < 0) {
+      return { error: "Invalid index." };
+    }
+    let nodes = [];
+    try {
+      nodes = Array.from(document.querySelectorAll(selector));
+    } catch {
+      return { error: "Invalid selector." };
+    }
+    if (!nodes.length) {
+      return { error: "Selector matched no elements." };
+    }
+    if (index >= nodes.length) {
+      return { error: "Index out of bounds." };
+    }
+    return { node: nodes[index] };
+  }
+
+  return { error: "Unsupported extraction target." };
 }
 
 function buildSelector(node) {
@@ -308,41 +574,59 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== "object") return;
   if (message.type === "FIND_SCOPE") {
-    const node = findMinimumScope(message.text || "");
-    if (!node) {
-      sendResponse({ ok: false, error: "Scope not found." });
+    const rawText = message.text || "";
+    const baseTarget = { kind: "textScope", text: rawText };
+    const resolved = resolveExtractionTarget(baseTarget);
+    if (resolved.error) {
+      sendResponse({ ok: false, error: resolved.error });
       return;
+    }
+    let effectiveNode = resolved.node;
+    let responseTarget = selectInferredTarget(rawText, resolved.node) || baseTarget;
+    if (resolved.node === document.body) {
+      const scoped = findBestScopeCandidate(rawText);
+      if (scoped) {
+        effectiveNode = scoped.node;
+        responseTarget = scoped.target;
+      } else if (
+        responseTarget.kind === "css" &&
+        responseTarget.selector === "body"
+      ) {
+        responseTarget = baseTarget;
+      }
     }
     sendResponse({
       ok: true,
-      extracted: node.innerText || "",
-      selector: buildSelector(node)
+      extracted: effectiveNode.innerText || "",
+      target: responseTarget
     });
     return;
   }
   if (message.type === "EXTRACT_BY_SELECTOR") {
-    const selector = message.selector || "";
-    if (!selector) {
-      sendResponse({ ok: false, error: "Missing selector." });
+    const { target, error } = normalizeExtractionTarget(
+      message.target ?? message.selector
+    );
+    if (error) {
+      sendResponse({ ok: false, error });
       return;
     }
-    let node = null;
-    try {
-      node = document.querySelector(selector);
-    } catch {
-      sendResponse({ ok: false, error: "Invalid selector." });
+    const resolved = resolveExtractionTarget(target);
+    if (resolved.error) {
+      sendResponse({ ok: false, error: resolved.error });
       return;
     }
-    if (!node) {
-      sendResponse({ ok: false, error: "Selector not found." });
-      return;
-    }
-    sendResponse({ ok: true, extracted: node.innerText || "", selector });
+    sendResponse({ ok: true, extracted: resolved.node.innerText || "", target });
     return;
   }
   if (message.type === "EXTRACT_FULL") {
-    const extracted = document.body?.innerText || "";
-    sendResponse({ ok: true, extracted, selector: "body" });
+    const target = { kind: "css", selector: "body" };
+    const resolved = resolveExtractionTarget(target);
+    if (resolved.error) {
+      const extracted = document.body?.innerText || "";
+      sendResponse({ ok: true, extracted, target });
+      return;
+    }
+    sendResponse({ ok: true, extracted: resolved.node.innerText || "", target });
   }
 });
 

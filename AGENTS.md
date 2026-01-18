@@ -30,6 +30,14 @@ Forbidden:
 * Inferred intent
 * Heuristic task selection
 
+Allowed (explicit exception):
+
+* Auto‑generated or inferred selectors, but **only** when they resolve to one of the following concrete patterns:
+  * `{ kind: "css"; selector: string }`
+  * `{ kind: "cssAll"; selector: string; index: number }`
+  * `{ kind: "textScope"; text: string }`
+  * `{ kind: "anchoredCss"; anchor: { kind: "textScope"; text: string }; selector: string }`
+
 If a change violates this, it is **out of scope**.
 
 ---
@@ -879,4 +887,3 @@ Legacy convenience is not a justification for ambiguity.
 > The tool must always make it obvious *what will run*, *with what*, and *why*.
 
 Agents exist to preserve this clarity — not to smooth it away.
-

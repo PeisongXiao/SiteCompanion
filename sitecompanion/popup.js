@@ -11,6 +11,7 @@ const settingsBtn = document.getElementById("settingsBtn");
 const copyRenderedBtn = document.getElementById("copyRenderedBtn");
 const copyRawBtn = document.getElementById("copyRawBtn");
 const clearOutputBtn = document.getElementById("clearOutputBtn");
+const outputSection = document.querySelector(".output");
 
 const OUTPUT_STORAGE_KEY = "lastOutput";
 const AUTO_RUN_KEY = "autoRunDefaultTask";
@@ -30,6 +31,7 @@ const extractFullBtn = document.getElementById("extractFullBtn");
 const extractedPreview = document.getElementById("extractedPreview");
 const siteNameInput = document.getElementById("siteNameInput");
 const urlPatternInput = document.getElementById("urlPatternInput");
+const workspaceSelect = document.getElementById("workspaceSelect");
 const retryExtractBtn = document.getElementById("retryExtractBtn");
 const confirmSiteBtn = document.getElementById("confirmSiteBtn");
 const currentWorkspaceName = document.getElementById("currentWorkspaceName");
@@ -54,7 +56,8 @@ const state = {
   siteTextTarget: null,
   selectedTaskId: "",
   selectedEnvId: "",
-  selectedProfileId: ""
+  selectedProfileId: "",
+  alwaysShowOutput: false
 };
 
 async function switchState(stateName) {
@@ -66,11 +69,13 @@ async function switchState(stateName) {
   if (stateName === "unknown") {
     unknownSiteState.classList.remove("hidden");
   } else if (stateName === "review") {
+    updateWorkspaceOptions();
     extractionReviewState.classList.remove("hidden");
   } else if (stateName === "normal") {
     normalExecutionState.classList.remove("hidden");
   }
   setMinimalStatus("");
+  updateOutputVisibility();
   await chrome.storage.local.set({ lastPopupState: stateName });
 }
 
@@ -80,7 +85,8 @@ function buildPopupDraft() {
     siteText: state.siteText || "",
     urlPattern: urlPatternInput?.value?.trim() || "",
     siteName: siteNameInput?.value?.trim() || "",
-    siteTextTarget: state.siteTextTarget
+    siteTextTarget: state.siteTextTarget,
+    workspaceId: workspaceSelect?.value || "global"
   };
 }
 
@@ -103,6 +109,9 @@ function applyPopupDraft(draft) {
   }
   if (typeof draft.siteName === "string") {
     siteNameInput.value = draft.siteName;
+  }
+  if (typeof draft.workspaceId === "string" && workspaceSelect) {
+    workspaceSelect.value = draft.workspaceId;
   }
   if (draft.siteTextTarget) {
     state.siteTextTarget = draft.siteTextTarget;
@@ -243,6 +252,31 @@ function normalizeStoredExtractTarget(site) {
     return { kind: "css", selector: legacy.trim() };
   }
   return null;
+}
+
+function updateWorkspaceOptions() {
+  if (!workspaceSelect) return;
+  const selected = workspaceSelect.value || "global";
+  workspaceSelect.innerHTML = "";
+
+  const globalOpt = document.createElement("option");
+  globalOpt.value = "global";
+  globalOpt.textContent = "Global";
+  workspaceSelect.appendChild(globalOpt);
+
+  for (const workspace of state.workspaces || []) {
+    const opt = document.createElement("option");
+    opt.value = workspace.id;
+    opt.textContent = workspace.name || "Untitled Workspace";
+    workspaceSelect.appendChild(opt);
+  }
+
+  if (selected) {
+    workspaceSelect.value = selected;
+  }
+  if (!workspaceSelect.value) {
+    workspaceSelect.value = "global";
+  }
 }
 
 function filterApiConfigsForScope(apiConfigs, workspace, site) {
@@ -527,6 +561,13 @@ function setAnalyzing(isAnalyzing) {
   updateProfileSelectState();
 }
 
+function updateOutputVisibility() {
+  if (!outputSection) return;
+  const shouldHide =
+    state.currentPopupState !== "normal" && !state.alwaysShowOutput;
+  outputSection.classList.toggle("hidden", shouldHide);
+}
+
 function updateSiteTextCount() {
   postingCountEl.textContent = `Site Text: ${state.siteText.length} chars`;
 }
@@ -766,6 +807,7 @@ async function loadConfig() {
     "workspaces",
     "sites",
     "theme",
+    "alwaysShowOutput",
     LAST_TASK_KEY,
     LAST_ENV_KEY,
     LAST_PROFILE_KEY
@@ -789,6 +831,7 @@ async function loadConfig() {
     : state.workspaces;
   state.sites = sites;
   state.workspaces = workspaces;
+  updateWorkspaceOptions();
   if (needsSiteUpdate) {
     await chrome.storage.local.set({ sites });
   }
@@ -810,7 +853,9 @@ async function loadConfig() {
   if (stored.theme) {
     state.globalTheme = stored.theme;
   }
+  state.alwaysShowOutput = Boolean(stored.alwaysShowOutput);
   applyTheme(resolveThemeForPopup(state.globalTheme));
+  updateOutputVisibility();
 
   const effectiveEnvs = resolveEffectiveList(
     envs,
@@ -1206,12 +1251,18 @@ urlPatternInput.addEventListener("input", () => {
   void persistPopupDraft();
 });
 
+workspaceSelect?.addEventListener("change", () => {
+  if (state.currentPopupState !== "review") return;
+  void persistPopupDraft();
+});
+
 retryExtractBtn.addEventListener("click", () => {
   switchState("unknown");
   partialTextPaste.value = "";
   extractedPreview.textContent = "";
   urlPatternInput.value = "";
   siteNameInput.value = "";
+  if (workspaceSelect) workspaceSelect.value = "global";
   state.siteText = "";
   state.siteTextTarget = null;
   setMinimalStatus("");
@@ -1246,17 +1297,29 @@ confirmSiteBtn.addEventListener("click", async () => {
     id: `site-${Date.now()}`,
     name,
     urlPattern: pattern,
-    workspaceId: "global", // Default to global for now
+    workspaceId: workspaceSelect?.value || "global",
     extractTarget: state.siteTextTarget
   };
 
   state.sites.push(newSite);
-  await chrome.storage.local.set({ sites: state.sites });
+  state.outputRaw = "";
+  renderOutput();
+  await persistOutputNow();
+  await chrome.storage.local.set({
+    sites: state.sites,
+    [LAST_TASK_KEY]: "",
+    [LAST_ENV_KEY]: "",
+    [LAST_PROFILE_KEY]: "",
+    lastPopupState: "normal"
+  });
   await clearPopupDraft();
   state.currentSite = newSite;
-  state.currentWorkspace = { name: "Global", id: "global" };
-  currentWorkspaceName.textContent = "Global";
-  switchState("normal");
+  const selectedWorkspace =
+    state.workspaces.find((entry) => entry.id === newSite.workspaceId) || null;
+  state.currentWorkspace = selectedWorkspace || { name: "Global", id: "global" };
+  currentWorkspaceName.textContent = state.currentWorkspace.name || "Global";
+  await loadConfig();
+  await switchState("normal");
   updateSiteTextCount();
   setStatus("Site saved.");
 });
@@ -1422,5 +1485,9 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.theme) {
     state.globalTheme = changes.theme.newValue || "system";
     applyTheme(resolveThemeForPopup(state.globalTheme));
+  }
+  if (changes.alwaysShowOutput) {
+    state.alwaysShowOutput = Boolean(changes.alwaysShowOutput.newValue);
+    updateOutputVisibility();
   }
 });

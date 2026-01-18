@@ -20,6 +20,7 @@ const sidebarErrorsEl = document.getElementById("sidebarErrors");
 const themeSelect = document.getElementById("themeSelect");
 const toolbarPositionSelect = document.getElementById("toolbarPositionSelect");
 const toolbarAutoHide = document.getElementById("toolbarAutoHide");
+const alwaysShowOutput = document.getElementById("alwaysShowOutput");
 const globalSitesContainer = document.getElementById("globalSites");
 const toc = document.querySelector(".toc");
 const tocResizer = document.getElementById("tocResizer");
@@ -3527,6 +3528,7 @@ async function loadSettings() {
     sites = [],
     toolbarPosition = "bottom-right",
     toolbarAutoHide: storedToolbarAutoHide = true,
+    alwaysShowOutput: storedAlwaysShowOutput = false,
     sidebarWidth
   } = await getStorage([
     "apiKey",
@@ -3562,6 +3564,9 @@ async function loadSettings() {
   }
   if (toolbarAutoHide) {
     toolbarAutoHide.checked = Boolean(storedToolbarAutoHide);
+  }
+  if (alwaysShowOutput) {
+    alwaysShowOutput.checked = Boolean(storedAlwaysShowOutput);
   }
   if (Number.isFinite(sidebarWidth)) {
     applySidebarWidth(sidebarWidth);
@@ -3962,6 +3967,7 @@ async function saveSettings() {
         ? toolbarPositionSelect.value
         : "bottom-right",
       toolbarAutoHide: toolbarAutoHide ? toolbarAutoHide.checked : true,
+      alwaysShowOutput: alwaysShowOutput ? alwaysShowOutput.checked : false,
       workspaces,
       sites
     });

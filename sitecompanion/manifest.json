@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SiteCompanion",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "AI companion for site-bound text extraction and tasks.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": ["<all_urls>"],

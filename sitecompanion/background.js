@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = {
   shortcuts: [],
   theme: "system",
   toolbarAutoHide: true,
+  alwaysShowOutput: false,
   workspaces: []
 };
 

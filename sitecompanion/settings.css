@@ -248,12 +248,20 @@ body.is-resizing {
 }
 
 .sub-panel .panel-body {
-  padding: 0 12px 12px;
+  padding: 12px;
 }
 
 .panel-body {
   margin-top: 0;
-  padding: 0 16px 16px;
+  padding: 12px 16px 16px;
+}
+
+.sub-panel .panel-body.panel-body-inherited {
+  padding: 0 12px 12px;
+}
+
+.sub-panel .scope-group-inherited {
+  margin-top: 0;
 }
 
 .panel[open] .panel-summary {

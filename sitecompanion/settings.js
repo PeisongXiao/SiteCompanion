@@ -132,6 +132,37 @@ function renderGlobalSitesList(sites) {
   }
 }
 
+function renderWorkspaceSitesList(list, workspaceId, sites) {
+  if (!list) return;
+  const ownedSites = (sites || []).filter(
+    (site) => (site.workspaceId || "global") === workspaceId
+  );
+  list.innerHTML = "";
+  if (!ownedSites.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No sites inherit from this workspace.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const site of ownedSites) {
+    const link = document.createElement("a");
+    link.href = "#";
+    link.textContent = site.name || site.urlPattern || "Untitled Site";
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      const siteCard = document.querySelector(
+        `.site-card[data-id="${site.id}"]`
+      );
+      if (siteCard) {
+        siteCard.scrollIntoView({ behavior: "smooth", block: "center" });
+        openDetailsChain(document.getElementById("sites-panel"));
+      }
+    });
+    list.appendChild(link);
+  }
+}
+
 function applyTheme(theme) {
   const value = theme || "system";
   document.documentElement.dataset.theme = value;
@@ -1563,7 +1594,7 @@ function renderWorkspaceSection(title, containerClass, items, builder, newItemFa
   details.appendChild(summary);
 
   const body = document.createElement("div");
-  body.className = "panel-body";
+  body.className = "panel-body panel-body-inherited";
   body.style.paddingTop = "10px";
   
   const listContainer = document.createElement("div");
@@ -1887,7 +1918,9 @@ function buildScopedModuleSection({
     );
   };
 
-  body.appendChild(buildScopeGroup("Inherited", inheritedList));
+  const inheritedGroup = buildScopeGroup("Inherited", inheritedList);
+  inheritedGroup.classList.add("scope-group-inherited");
+  body.appendChild(inheritedGroup);
 
   const localContainer = document.createElement("div");
   localContainer.className = localContainerClass;
@@ -2296,6 +2329,7 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     if (confirm(`Delete workspace "${ws.name}"? All items will move to global.`)) {
       card.remove();
       scheduleSidebarErrors();
+      updateToc(collectWorkspaces(), collectSites());
     }
   });
 
@@ -2430,33 +2464,9 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
   const sitesBody = document.createElement("div");
   sitesBody.className = "panel-body";
   const siteList = document.createElement("div");
-  siteList.className = "sites-list";
-  const ownedSites = (allSites || []).filter(
-    (site) => (site.workspaceId || "global") === card.dataset.id
-  );
-  if (!ownedSites.length) {
-    const empty = document.createElement("div");
-    empty.className = "hint";
-    empty.textContent = "No sites inherit from this workspace.";
-    siteList.appendChild(empty);
-  } else {
-    for (const site of ownedSites) {
-      const link = document.createElement("a");
-      link.href = "#";
-      link.textContent = site.name || site.urlPattern || "Untitled Site";
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        const siteCard = document.querySelector(
-          `.site-card[data-id="${site.id}"]`
-        );
-        if (siteCard) {
-          siteCard.scrollIntoView({ behavior: "smooth", block: "center" });
-          openDetailsChain(document.getElementById("sites-panel"));
-        }
-      });
-      siteList.appendChild(link);
-    }
-  }
+  siteList.className = "sites-list workspace-sites-list";
+  siteList.dataset.workspaceId = card.dataset.id;
+  renderWorkspaceSitesList(siteList, card.dataset.id, allSites);
   sitesBody.appendChild(siteList);
   sitesSection.appendChild(sitesBody);
   card.appendChild(sitesSection);
@@ -2592,6 +2602,7 @@ function buildSiteCard(site, allWorkspaces = []) {
   deleteBtn.addEventListener("click", () => {
     card.remove();
     scheduleSidebarErrors();
+    updateToc(collectWorkspaces(), collectSites());
   });
 
   row.appendChild(nameField);
@@ -3240,6 +3251,7 @@ function updateSidebarErrors() {
     }
   }
 
+  const sites = collectSites();
   const patterns = siteCards
     .map((card) => (card.querySelector(".site-pattern")?.value || "").trim())
     .filter(Boolean);
@@ -3255,16 +3267,22 @@ function updateSidebarErrors() {
     }
   }
 
+  workspaceCards.forEach((card) => {
+    const list = card.querySelector(".workspace-sites-list");
+    if (!list) return;
+    renderWorkspaceSitesList(list, card.dataset.id, sites);
+  });
+
   if (!errors.length) {
     sidebarErrorsEl.classList.add("hidden");
     sidebarErrorsEl.textContent = "";
-    renderGlobalSitesList(collectSites());
+    renderGlobalSitesList(sites);
     return;
   }
 
   sidebarErrorsEl.textContent = errors.map((error) => `- ${error}`).join("\n");
   sidebarErrorsEl.classList.remove("hidden");
-  renderGlobalSitesList(collectSites());
+  renderGlobalSitesList(sites);
 }
 
 async function loadSettings() {
@@ -3664,7 +3682,7 @@ async function loadSettings() {
 
   workspacesContainer.innerHTML = "";
   for (const ws of workspaces) {
-    workspacesContainer.appendChild(buildWorkspaceCard(ws, workspaces));
+    workspacesContainer.appendChild(buildWorkspaceCard(ws, workspaces, sites));
   }
 
   sitesContainer.innerHTML = "";
@@ -4008,6 +4026,13 @@ function updateToc(workspaces, sites) {
         sitesList.appendChild(li);
     }
   }
+
+  const workspaceCards = document.querySelectorAll(".workspace-card");
+  workspaceCards.forEach((card) => {
+    const list = card.querySelector(".workspace-sites-list");
+    if (!list) return;
+    renderWorkspaceSitesList(list, card.dataset.id, sites);
+  });
 }
 
 function initToc() {

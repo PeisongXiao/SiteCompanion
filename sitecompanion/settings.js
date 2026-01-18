@@ -26,9 +26,7 @@ const toc = document.querySelector(".toc");
 const tocResizer = document.getElementById("tocResizer");
 
 const OPENAI_DEFAULTS = {
-  apiBaseUrl: "https://api.openai.com/v1",
-  apiKeyHeader: "Authorization",
-  apiKeyPrefix: "Bearer "
+  apiBaseUrl: "https://api.openai.com/v1"
 };
 const DEFAULT_MODEL = "gpt-5.2";
 const DEFAULT_SYSTEM_PROMPT = "";
@@ -476,12 +474,12 @@ function normalizeConfigList(list) {
 }
 
 const TEMPLATE_PLACEHOLDERS = [
-  "PROMPT_GOES_HERE",
   "SYSTEM_PROMPT_GOES_HERE",
+  "PROMPT_GOES_HERE",
   "API_KEY_GOES_HERE",
   "MODEL_GOES_HERE",
   "API_BASE_URL_GOES_HERE"
-];
+].sort((a, b) => b.length - a.length);
 
 function buildTemplateValidationSource(template) {
   let output = template || "";
@@ -492,10 +490,28 @@ function buildTemplateValidationSource(template) {
   return output;
 }
 
+function normalizeTemplateInput(template) {
+  return (template || "")
+    .replace(/\uFEFF/g, "")
+    .replace(/[\u200B-\u200D\u2060]/g, "")
+    .replace(/[\u2028\u2029]/g, "\n")
+    .replace(/[\u0000-\u001F]/g, (char) =>
+      char === "\n" || char === "\r" || char === "\t" ? char : " "
+    )
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
 function isValidTemplateJson(template) {
   if (!template) return false;
+  const normalized = normalizeTemplateInput(template);
   try {
-    JSON.parse(buildTemplateValidationSource(template));
+    JSON.parse(normalized);
+    return true;
+  } catch {
+    // Fall through to placeholder-neutralized parsing.
+  }
+  try {
+    JSON.parse(buildTemplateValidationSource(normalized));
     return true;
   } catch {
     return false;
@@ -549,8 +565,6 @@ function readApiConfigFromCard(card) {
   const nameInput = card.querySelector(".api-config-name");
   const keySelect = card.querySelector(".api-config-key-select");
   const baseInput = card.querySelector(".api-config-base");
-  const headerInput = card.querySelector(".api-config-header");
-  const prefixInput = card.querySelector(".api-config-prefix");
   const modelInput = card.querySelector(".api-config-model");
   const urlInput = card.querySelector(".api-config-url");
   const templateInput = card.querySelector(".api-config-template");
@@ -562,8 +576,6 @@ function readApiConfigFromCard(card) {
     name: (nameInput?.value || "Default").trim(),
     apiKeyId: keySelect?.value || "",
     apiBaseUrl: (baseInput?.value || "").trim(),
-    apiKeyHeader: (headerInput?.value || "").trim(),
-    apiKeyPrefix: prefixInput?.value || "",
     model: (modelInput?.value || "").trim(),
     apiUrl: (urlInput?.value || "").trim(),
     requestTemplate: (templateInput?.value || "").trim(),
@@ -623,30 +635,6 @@ function buildApiConfigCard(config) {
   baseField.appendChild(baseLabel);
   baseField.appendChild(baseInput);
 
-  const headerField = document.createElement("div");
-  headerField.className = "field advanced-only";
-  const headerLabel = document.createElement("label");
-  headerLabel.textContent = "API Key Header";
-  const headerInput = document.createElement("input");
-  headerInput.type = "text";
-  headerInput.placeholder = OPENAI_DEFAULTS.apiKeyHeader;
-  headerInput.value = config.apiKeyHeader || "";
-  headerInput.className = "api-config-header";
-  headerField.appendChild(headerLabel);
-  headerField.appendChild(headerInput);
-
-  const prefixField = document.createElement("div");
-  prefixField.className = "field advanced-only";
-  const prefixLabel = document.createElement("label");
-  prefixLabel.textContent = "API Key Prefix";
-  const prefixInput = document.createElement("input");
-  prefixInput.type = "text";
-  prefixInput.placeholder = OPENAI_DEFAULTS.apiKeyPrefix;
-  prefixInput.value = config.apiKeyPrefix || "";
-  prefixInput.className = "api-config-prefix";
-  prefixField.appendChild(prefixLabel);
-  prefixField.appendChild(prefixInput);
-
   const modelField = document.createElement("div");
   modelField.className = "field basic-only";
   const modelLabel = document.createElement("label");
@@ -674,7 +662,7 @@ function buildApiConfigCard(config) {
   const templateField = document.createElement("div");
   templateField.className = "field advanced-only";
   const templateLabel = document.createElement("label");
-  templateLabel.textContent = "Request JSON template";
+  templateLabel.textContent = "Request JSON body";
   const templateInput = document.createElement("textarea");
   templateInput.rows = 8;
   templateInput.placeholder = [
@@ -747,8 +735,6 @@ function buildApiConfigCard(config) {
       id: newApiConfigId(),
       name,
       apiBaseUrl: OPENAI_DEFAULTS.apiBaseUrl,
-      apiKeyHeader: OPENAI_DEFAULTS.apiKeyHeader,
-      apiKeyPrefix: OPENAI_DEFAULTS.apiKeyPrefix,
       model: DEFAULT_MODEL,
       apiUrl: "",
       requestTemplate: "",
@@ -787,8 +773,6 @@ function buildApiConfigCard(config) {
   resetBtn.textContent = "Reset to OpenAI";
   resetBtn.addEventListener("click", () => {
     baseInput.value = OPENAI_DEFAULTS.apiBaseUrl;
-    headerInput.value = OPENAI_DEFAULTS.apiKeyHeader;
-    prefixInput.value = OPENAI_DEFAULTS.apiKeyPrefix;
     modelInput.value = DEFAULT_MODEL;
     urlInput.value = "";
     templateInput.value = "";
@@ -808,8 +792,6 @@ function buildApiConfigCard(config) {
   const updateSelect = () => updateEnvApiOptions();
   nameInput.addEventListener("input", updateSelect);
   baseInput.addEventListener("input", updateSelect);
-  headerInput.addEventListener("input", updateSelect);
-  prefixInput.addEventListener("input", updateSelect);
   modelInput.addEventListener("input", updateSelect);
   urlInput.addEventListener("input", updateSelect);
   templateInput.addEventListener("input", updateSelect);
@@ -830,8 +812,6 @@ function buildApiConfigCard(config) {
   card.appendChild(nameField);
   card.appendChild(keyField);
   card.appendChild(baseField);
-  card.appendChild(headerField);
-  card.appendChild(prefixField);
   card.appendChild(modelField);
   card.appendChild(urlField);
   card.appendChild(templateField);
@@ -3479,7 +3459,7 @@ function updateSidebarErrors() {
       }
     }
 
-    if (!defaultApiConfig.advanced && defaultApiConfig?.apiKeyHeader) {
+    if (!defaultApiConfig.advanced) {
       const key = enabledApiKeys.find(
         (entry) => entry.id === defaultApiConfig?.apiKeyId
       );
@@ -3534,8 +3514,6 @@ async function loadSettings() {
     activeEnvConfigId = "",
     profiles = [],
     apiBaseUrl = "",
-    apiKeyHeader = "",
-    apiKeyPrefix = "",
     model = "",
     systemPrompt = "",
     resume = "",
@@ -3559,8 +3537,6 @@ async function loadSettings() {
     "activeEnvConfigId",
     "profiles",
     "apiBaseUrl",
-    "apiKeyHeader",
-    "apiKeyPrefix",
     "model",
     "systemPrompt",
     "resume",
@@ -3724,8 +3700,6 @@ async function loadSettings() {
       id: newApiConfigId(),
       name: "Default",
       apiBaseUrl: apiBaseUrl || OPENAI_DEFAULTS.apiBaseUrl,
-      apiKeyHeader: apiKeyHeader || OPENAI_DEFAULTS.apiKeyHeader,
-      apiKeyPrefix: apiKeyPrefix || OPENAI_DEFAULTS.apiKeyPrefix,
       model: model || DEFAULT_MODEL,
       apiKeyId: resolvedActiveId || resolvedKeys[0]?.id || "",
       apiUrl: "",
@@ -4046,8 +4020,6 @@ addApiConfigBtn.addEventListener("click", () => {
     id: newApiConfigId(),
     name,
     apiBaseUrl: OPENAI_DEFAULTS.apiBaseUrl,
-    apiKeyHeader: OPENAI_DEFAULTS.apiKeyHeader,
-    apiKeyPrefix: OPENAI_DEFAULTS.apiKeyPrefix,
     model: DEFAULT_MODEL,
     apiUrl: "",
     requestTemplate: "",

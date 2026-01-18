@@ -10,8 +10,6 @@ const DEFAULT_SETTINGS = {
   activeEnvConfigId: "",
   profiles: [],
   apiBaseUrl: "https://api.openai.com/v1",
-  apiKeyHeader: "Authorization",
-  apiKeyPrefix: "Bearer ",
   model: "gpt-5.2",
   systemPrompt: "",
   tasks: DEFAULT_TASKS,
@@ -25,6 +23,8 @@ const DEFAULT_SETTINGS = {
 const OUTPUT_STORAGE_KEY = "lastOutput";
 const AUTO_RUN_KEY = "autoRunDefaultTask";
 const SHORTCUT_RUN_KEY = "runShortcutId";
+const DEFAULT_API_KEY_HEADER = "Authorization";
+const DEFAULT_API_KEY_PREFIX = "Bearer ";
 let activeAbortController = null;
 let keepalivePort = null;
 const streamState = {
@@ -112,8 +112,6 @@ chrome.runtime.onInstalled.addListener(async () => {
         id,
         name: "Default",
         apiBaseUrl: stored.apiBaseUrl || DEFAULT_SETTINGS.apiBaseUrl,
-        apiKeyHeader: stored.apiKeyHeader || DEFAULT_SETTINGS.apiKeyHeader,
-        apiKeyPrefix: stored.apiKeyPrefix || DEFAULT_SETTINGS.apiKeyPrefix,
         model: stored.model || DEFAULT_SETTINGS.model,
         apiKeyId: fallbackKeyId,
         apiUrl: "",
@@ -409,6 +407,12 @@ async function handleAnalysisRequest(port, payload, signal) {
   } = payload || {};
 
   const isAdvanced = apiMode === "advanced";
+  const resolvedApiKeyHeader = isAdvanced
+    ? ""
+    : apiKeyHeader || DEFAULT_API_KEY_HEADER;
+  const resolvedApiKeyPrefix = isAdvanced
+    ? ""
+    : apiKeyPrefix ?? DEFAULT_API_KEY_PREFIX;
   if (isAdvanced) {
     if (!apiUrl) {
       safePost(port, { type: "ERROR", message: "Missing API URL." });
@@ -420,7 +424,7 @@ async function handleAnalysisRequest(port, payload, signal) {
       return;
     }
 
-    if (apiKeyHeader && !apiKey) {
+    if (resolvedApiKeyHeader && !apiKey) {
       safePost(port, { type: "ERROR", message: "Missing API key." });
       return;
     }
@@ -456,8 +460,8 @@ async function handleAnalysisRequest(port, payload, signal) {
         apiKey,
         apiUrl,
         requestTemplate,
-        apiKeyHeader,
-        apiKeyPrefix,
+        apiKeyHeader: resolvedApiKeyHeader,
+        apiKeyPrefix: resolvedApiKeyPrefix,
         apiBaseUrl,
         model,
         systemPrompt: systemPrompt || "",
@@ -472,8 +476,8 @@ async function handleAnalysisRequest(port, payload, signal) {
       await streamChatCompletion({
         apiKey,
         apiBaseUrl,
-        apiKeyHeader,
-        apiKeyPrefix,
+        apiKeyHeader: resolvedApiKeyHeader,
+        apiKeyPrefix: resolvedApiKeyPrefix,
         model,
         systemPrompt: systemPrompt || "",
         userMessage,
@@ -536,8 +540,34 @@ function buildTemplateBody(template, replacements) {
   try {
     return JSON.parse(filled);
   } catch {
-    throw new Error("Invalid request template JSON.");
+    throw new Error("Invalid request template JSON." + filled);
   }
+}
+
+function extractStreamDelta(parsed) {
+  if (!parsed) return "";
+  const openAiDelta = parsed?.choices?.[0]?.delta?.content;
+  if (openAiDelta) return openAiDelta;
+  const openAiMessage = parsed?.choices?.[0]?.message?.content;
+  if (openAiMessage) return openAiMessage;
+  const ollamaMessage = parsed?.message?.content;
+  if (ollamaMessage) return ollamaMessage;
+  if (typeof parsed?.response === "string") return parsed.response;
+  if (typeof parsed?.content === "string") return parsed.content;
+  return "";
+}
+
+function parseStreamLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("event:") || trimmed.startsWith("id:")) {
+    return null;
+  }
+  if (trimmed.startsWith("data:")) {
+    const data = trimmed.slice(5).trim();
+    return data || null;
+  }
+  return trimmed;
 }
 
 async function readSseStream(response, onDelta) {
@@ -545,7 +575,7 @@ async function readSseStream(response, onDelta) {
   const decoder = new TextDecoder();
   let buffer = "";
 
-  // OpenAI-compatible SSE stream; parse incremental deltas from data lines.
+  // OpenAI-compatible SSE or newline-delimited JSON streaming.
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -555,23 +585,32 @@ async function readSseStream(response, onDelta) {
     buffer = lines.pop() || "";
 
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-
-      const data = trimmed.slice(5).trim();
-      if (!data) continue;
-      if (data === "[DONE]") return;
+      const payload = parseStreamLine(line);
+      if (!payload) continue;
+      if (payload === "[DONE]") return;
 
       let parsed;
       try {
-        parsed = JSON.parse(data);
+        parsed = JSON.parse(payload);
       } catch {
         continue;
       }
 
-      const delta = parsed?.choices?.[0]?.delta?.content;
+      const delta = extractStreamDelta(parsed);
       if (delta) onDelta(delta);
+      if (parsed?.done === true) return;
     }
+  }
+
+  const tail = parseStreamLine(buffer);
+  if (!tail) return;
+  if (tail === "[DONE]") return;
+  try {
+    const parsed = JSON.parse(tail);
+    const delta = extractStreamDelta(parsed);
+    if (delta) onDelta(delta);
+  } catch {
+    // Ignore trailing parse failures.
   }
 }
 
@@ -636,8 +675,8 @@ async function streamCustomCompletion({
   onDelta
 }) {
   const replacements = {
-    PROMPT_GOES_HERE: userMessage,
     SYSTEM_PROMPT_GOES_HERE: systemPrompt,
+    PROMPT_GOES_HERE: userMessage,
     API_KEY_GOES_HERE: apiKey,
     MODEL_GOES_HERE: model || "",
     API_BASE_URL_GOES_HERE: apiBaseUrl || ""

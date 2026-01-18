@@ -186,13 +186,16 @@ function normalizeConfigList(list) {
     : [];
 }
 
+const DEFAULT_API_KEY_HEADER = "Authorization";
+const DEFAULT_API_KEY_PREFIX = "Bearer ";
+
 const TEMPLATE_PLACEHOLDERS = [
-  "PROMPT_GOES_HERE",
   "SYSTEM_PROMPT_GOES_HERE",
+  "PROMPT_GOES_HERE",
   "API_KEY_GOES_HERE",
   "MODEL_GOES_HERE",
   "API_BASE_URL_GOES_HERE"
-];
+].sort((a, b) => b.length - a.length);
 
 function buildTemplateValidationSource(template) {
   let output = template || "";
@@ -203,10 +206,28 @@ function buildTemplateValidationSource(template) {
   return output;
 }
 
+function normalizeTemplateInput(template) {
+  return (template || "")
+    .replace(/\uFEFF/g, "")
+    .replace(/[\u200B-\u200D\u2060]/g, "")
+    .replace(/[\u2028\u2029]/g, "\n")
+    .replace(/[\u0000-\u001F]/g, (char) =>
+      char === "\n" || char === "\r" || char === "\t" ? char : " "
+    )
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
 function isValidTemplateJson(template) {
   if (!template) return false;
+  const normalized = normalizeTemplateInput(template);
   try {
-    JSON.parse(buildTemplateValidationSource(template));
+    JSON.parse(normalized);
+    return true;
+  } catch {
+    // Fall through to placeholder-neutralized parsing.
+  }
+  try {
+    JSON.parse(buildTemplateValidationSource(normalized));
     return true;
   } catch {
     return false;
@@ -1017,8 +1038,6 @@ async function handleAnalyze() {
     apiConfigs = [],
     activeApiConfigId = "",
     apiBaseUrl,
-    apiKeyHeader,
-    apiKeyPrefix,
     model,
     systemPrompt,
     resume
@@ -1028,8 +1047,6 @@ async function handleAnalyze() {
     "apiConfigs",
     "activeApiConfigId",
     "apiBaseUrl",
-    "apiKeyHeader",
-    "apiKeyPrefix",
     "model",
     "systemPrompt",
     "resume"
@@ -1071,8 +1088,8 @@ async function handleAnalyze() {
   const resolvedApiUrl = activeConfig?.apiUrl || "";
   const resolvedTemplate = activeConfig?.requestTemplate || "";
   const resolvedApiBaseUrl = activeConfig?.apiBaseUrl || apiBaseUrl || "";
-  const resolvedApiKeyHeader = activeConfig?.apiKeyHeader ?? apiKeyHeader ?? "";
-  const resolvedApiKeyPrefix = activeConfig?.apiKeyPrefix ?? apiKeyPrefix ?? "";
+  const resolvedApiKeyHeader = isAdvanced ? "" : DEFAULT_API_KEY_HEADER;
+  const resolvedApiKeyPrefix = isAdvanced ? "" : DEFAULT_API_KEY_PREFIX;
   const resolvedModel = activeConfig?.model || model || "";
 
   const resolvedKeys = normalizeConfigList(apiKeys).filter(

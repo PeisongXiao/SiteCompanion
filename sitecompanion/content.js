@@ -498,25 +498,26 @@ let suppressObserver = false;
 
 async function refreshToolbar() {
   suppressObserver = true;
-  let {
-    sites = [],
-    workspaces = [],
-    shortcuts = [],
-    presets = [],
-    toolbarPosition = "bottom-right",
-    theme = "system"
-  } = await chrome.storage.local.get([
-    "sites",
-    "workspaces",
-    "shortcuts",
-    "presets",
-    "toolbarPosition",
-    "theme"
-  ]);
-  const currentUrl = window.location.href;
-  const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
-  
   try {
+    if (!chrome?.runtime?.id) return;
+    let {
+      sites = [],
+      workspaces = [],
+      shortcuts = [],
+      presets = [],
+      toolbarPosition = "bottom-right",
+      theme = "system"
+    } = await chrome.storage.local.get([
+      "sites",
+      "workspaces",
+      "shortcuts",
+      "presets",
+      "toolbarPosition",
+      "theme"
+    ]);
+    const currentUrl = window.location.href;
+    const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
+
     if (!site) {
       const toolbar = document.getElementById("sitecompanion-toolbar");
       if (toolbar) toolbar.remove();
@@ -551,6 +552,12 @@ async function refreshToolbar() {
     const resolvedTheme = resolveThemeValue(theme, workspace, site);
     const themeMode = resolveThemeMode(resolvedTheme);
     createToolbar(siteShortcuts, resolvedPosition, themeMode);
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (message.includes("Extension context invalidated")) {
+      return;
+    }
+    console.warn("SiteCompanion toolbar refresh failed:", error);
   } finally {
     window.setTimeout(() => {
       suppressObserver = false;
@@ -565,7 +572,13 @@ function scheduleToolbarRefresh() {
   if (refreshTimer) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = null;
-    void refreshToolbar();
+    refreshToolbar().catch((error) => {
+      const message = String(error?.message || "");
+      if (message.includes("Extension context invalidated")) {
+        return;
+      }
+      console.warn("SiteCompanion toolbar refresh failed:", error);
+    });
   }, 200);
 }
 

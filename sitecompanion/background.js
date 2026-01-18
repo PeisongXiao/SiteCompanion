@@ -28,9 +28,9 @@ const DEFAULT_SETTINGS = {
   model: "gpt-4o-mini",
   systemPrompt:
     "You are a precise, honest assistant. Be concise and avoid inventing details, be critical about evaluations. You should put in a small summary of all the sections at the end. You should answer in no longer than 3 sections including the summary. And remember to bold or italicize key points.",
-  resume: "",
   tasks: DEFAULT_TASKS,
-  theme: "system"
+  theme: "system",
+  workspaces: []
 };
 
 const OUTPUT_STORAGE_KEY = "lastOutput";
@@ -54,7 +54,7 @@ function resetAbort() {
 function openKeepalive(tabId) {
   if (!tabId || keepalivePort) return;
   try {
-    keepalivePort = chrome.tabs.connect(tabId, { name: "wwcompanion-keepalive" });
+    keepalivePort = chrome.tabs.connect(tabId, { name: "sitecompanion-keepalive" });
     keepalivePort.onDisconnect.addListener(() => {
       keepalivePort = null;
     });
@@ -253,20 +253,17 @@ chrome.runtime.onInstalled.addListener(async () => {
       {
         id,
         name: "Default",
-        text: stored.resume || "",
-        type: "Resume"
+        text: stored.resume || ""
       }
     ];
   } else {
     const normalizedProfiles = stored.profiles.map((profile) => ({
       ...profile,
-      text: profile.text ?? "",
-      type: profile.type === "Profile" ? "Profile" : "Resume"
+      text: profile.text ?? ""
     }));
     const needsProfileUpdate = normalizedProfiles.some(
       (profile, index) =>
-        (profile.text || "") !== (stored.profiles[index]?.text || "") ||
-        (profile.type || "Resume") !== (stored.profiles[index]?.type || "Resume")
+        (profile.text || "") !== (stored.profiles[index]?.text || "")
     );
     if (needsProfileUpdate) {
       updates.profiles = normalizedProfiles;
@@ -364,17 +361,16 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-function buildUserMessage(resume, resumeType, task, posting) {
-  const header = resumeType === "Profile" ? "=== PROFILE ===" : "=== RESUME ===";
+function buildUserMessage(profileText, taskText, siteText) {
   return [
-    header,
-    resume || "",
+    "=== Profile ===",
+    profileText || "",
     "",
-    "=== TASK ===",
-    task || "",
+    "=== Task ===",
+    taskText || "",
     "",
-    "=== JOB POSTING ===",
-    posting || ""
+    "=== Site Text ===",
+    siteText || ""
   ].join("\n");
 }
 
@@ -406,10 +402,9 @@ async function handleAnalysisRequest(port, payload, signal) {
     apiKeyPrefix,
     model,
     systemPrompt,
-    resume,
-    resumeType,
+    profileText,
     taskText,
-    postingText,
+    siteText,
     tabId
   } = payload || {};
 
@@ -444,21 +439,20 @@ async function handleAnalysisRequest(port, payload, signal) {
     }
   }
 
-  if (!postingText) {
-    safePost(port, { type: "ERROR", message: "No job posting text provided." });
+  if (!siteText) {
+    safePost(port, { type: "ERROR", message: "No site text provided." });
     return;
   }
 
   if (!taskText) {
-    safePost(port, { type: "ERROR", message: "No task prompt selected." });
+    safePost(port, { type: "ERROR", message: "No task selected." });
     return;
   }
 
   const userMessage = buildUserMessage(
-    resume,
-    resumeType,
+    profileText,
     taskText,
-    postingText
+    siteText
   );
 
   await chrome.storage.local.set({ [OUTPUT_STORAGE_KEY]: "" });

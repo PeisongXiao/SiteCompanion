@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "WWCompanion",
-  "version": "0.3.1",
-  "description": "AI companion for WaterlooWorks job postings.",
+  "name": "SiteCompanion",
+  "version": "0.4.0",
+  "description": "AI companion for site-bound text extraction and tasks.",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://waterlooworks.uwaterloo.ca/*"],
+  "host_permissions": ["<all_urls>"],
   "action": {
-    "default_title": "WWCompanion",
+    "default_title": "SiteCompanion",
     "default_popup": "popup.html"
   },
   "background": {
@@ -15,7 +15,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://waterlooworks.uwaterloo.ca/*"],
+      "matches": ["<all_urls>"],
       "js": ["content.js"]
     }
   ],

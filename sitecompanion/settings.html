@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WWCompanion Settings</title>
+    <title>SiteCompanion Settings</title>
     <link rel="stylesheet" href="settings.css" />
   </head>
   <body>
     <header class="title-block">
-      <div class="title">WWCompanion Settings</div>
-      <div class="subtitle">Configure prompts, resume, and API access</div>
+      <div class="title">SiteCompanion Settings</div>
+      <div class="subtitle">Configure workspaces, tasks, and API access</div>
     </header>
     <div class="page-bar">
       <div id="status" class="status"></div>
@@ -18,134 +18,204 @@
 
     <div class="settings-layout">
       <nav class="toc" aria-label="Settings table of contents">
-        <div class="toc-heading">WWCompanion Settings</div>
+        <div class="toc-heading">SiteCompanion Settings</div>
         <button id="saveBtnSidebar" class="accent" type="button">Save Settings</button>
         <div id="statusSidebar" class="status"> </div>
         <div class="toc-title">Sections</div>
         <div class="toc-links">
-          <a href="#appearance-panel">Appearance</a>
-          <a href="#api-keys-panel">API Keys</a>
-          <a href="#api-panel">API</a>
-          <a href="#environment-panel">Environment</a>
-          <a href="#profiles-panel">My Profiles</a>
-          <a href="#tasks-panel">Task Presets</a>
+          <ul>
+            <li>
+              <div class="toc-item">
+                <span class="toc-caret">▸</span> <a href="#global-config-panel">Global Configuration</a>
+              </div>
+              <ul class="toc-sub hidden">
+                <li><a href="#appearance-panel">Appearance</a></li>
+                <li><a href="#api-keys-panel">API Keys</a></li>
+                <li><a href="#api-panel">API</a></li>
+                <li><a href="#environment-panel">Environments</a></li>
+                <li><a href="#profiles-panel">Profiles</a></li>
+                <li><a href="#tasks-panel">Tasks</a></li>
+                <li><a href="#presets-panel">Presets</a></li>
+              </ul>
+            </li>
+            <li>
+              <div class="toc-item">
+                <span class="toc-caret">▸</span> <a href="#workspaces-panel">Workspaces</a>
+              </div>
+              <ul class="toc-sub hidden" id="toc-workspaces-list"></ul>
+            </li>
+            <li>
+              <div class="toc-item">
+                <span class="toc-caret">▸</span> <a href="#sites-panel">Sites</a>
+              </div>
+              <ul class="toc-sub hidden" id="toc-sites-list"></ul>
+            </li>
+          </ul>
         </div>
         <div id="sidebarErrors" class="sidebar-errors hidden"></div>
       </nav>
       <main class="settings-main">
-    <details class="panel" id="appearance-panel">
+    <details class="panel" id="global-config-panel" open>
       <summary class="panel-summary">
-        <span class="panel-caret" aria-hidden="true">
-          <span class="caret-closed">▸</span>
-          <span class="caret-open">▾</span>
-        </span>
-        <h2>Appearance</h2>
+        <h2>Global Configuration</h2>
       </summary>
       <div class="panel-body">
-        <div class="field">
-          <label for="themeSelect">Theme</label>
-          <select id="themeSelect">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </div>
-      </div>
-    </details>
-
-    <details class="panel" id="api-keys-panel">
-      <summary class="panel-summary">
-        <span class="panel-caret" aria-hidden="true">
-          <span class="caret-closed">▸</span>
-          <span class="caret-open">▾</span>
-        </span>
-        <h2>API KEYS</h2>
-      </summary>
-      <div class="panel-body">
-        <div class="row">
-          <div></div>
-          <button id="addApiKeyBtn" class="ghost" type="button">Add Key</button>
-        </div>
-        <div id="apiKeys" class="api-keys"></div>
-      </div>
-    </details>
-
-    <details class="panel" id="api-panel">
-      <summary class="panel-summary">
-        <span class="panel-caret" aria-hidden="true">
-          <span class="caret-closed">▸</span>
-          <span class="caret-open">▾</span>
-        </span>
-        <h2>API</h2>
-      </summary>
-      <div class="panel-body">
-        <div class="row">
-          <div></div>
-          <div class="row-actions">
-            <button id="addApiConfigBtn" class="ghost" type="button">Add Config</button>
+        <!-- Appearance -->
+        <details class="panel sub-panel" id="appearance-panel">
+          <summary class="panel-summary">
+            <h2>Appearance</h2>
+          </summary>
+          <div class="panel-body">
+            <div class="field">
+              <label for="themeSelect">Theme</label>
+              <select id="themeSelect">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="toolbarPositionSelect">Toolbar Position</label>
+              <select id="toolbarPositionSelect">
+                <option value="bottom-right">Bottom Right</option>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="top-left">Top Left</option>
+                <option value="bottom-center">Bottom Center</option>
+              </select>
+            </div>
           </div>
-        </div>
-        <div id="apiConfigs" class="api-configs"></div>
+        </details>
+
+        <!-- API Keys -->
+        <details class="panel sub-panel" id="api-keys-panel">
+          <summary class="panel-summary">
+            <h2>API KEYS</h2>
+          </summary>
+          <div class="panel-body">
+            <div class="row">
+              <div></div>
+              <button id="addApiKeyBtn" class="ghost" type="button">Add Key</button>
+            </div>
+            <div id="apiKeys" class="api-keys"></div>
+          </div>
+        </details>
+
+        <!-- API -->
+        <details class="panel sub-panel" id="api-panel">
+          <summary class="panel-summary">
+            <h2>API</h2>
+          </summary>
+          <div class="panel-body">
+            <div class="row">
+              <div></div>
+              <div class="row-actions">
+                <button id="addApiConfigBtn" class="ghost" type="button">Add Config</button>
+              </div>
+            </div>
+            <div id="apiConfigs" class="api-configs"></div>
+          </div>
+        </details>
+
+        <!-- Envs -->
+        <details class="panel sub-panel" id="environment-panel">
+          <summary class="panel-summary">
+            <div class="row-title">
+              <h2>ENVIRONMENTS</h2>
+              <span class="hint hint-accent">Baseline environments</span>
+            </div>
+          </summary>
+          <div class="panel-body">
+            <div class="row">
+              <div></div>
+              <button id="addEnvConfigBtn" class="ghost" type="button">Add Env</button>
+            </div>
+            <div id="envConfigs" class="env-configs"></div>
+          </div>
+        </details>
+
+        <!-- Profiles -->
+        <details class="panel sub-panel" id="profiles-panel">
+          <summary class="panel-summary">
+            <div class="row-title">
+              <h2>PROFILES</h2>
+              <span class="hint hint-accent">Baseline user contexts</span>
+            </div>
+          </summary>
+          <div class="panel-body">
+            <div class="row">
+              <div></div>
+              <button id="addProfileBtn" class="ghost" type="button">Add Profile</button>
+            </div>
+            <div id="profiles" class="profiles"></div>
+          </div>
+        </details>
+
+        <!-- Tasks -->
+        <details class="panel sub-panel" id="tasks-panel">
+          <summary class="panel-summary">
+            <div class="row-title">
+              <h2>TASKS</h2>
+              <span class="hint hint-accent">Baseline execution units</span>
+            </div>
+          </summary>
+          <div class="panel-body">
+            <div class="row">
+              <div></div>
+              <button id="addTaskBtn" class="ghost" type="button">Add Task</button>
+            </div>
+            <div id="tasks" class="tasks"></div>
+          </div>
+        </details>
+
+        <!-- Presets -->
+        <details class="panel sub-panel" id="presets-panel">
+          <summary class="panel-summary">
+            <div class="row-title">
+              <h2>PRESETS</h2>
+              <span class="hint hint-accent">Toolbar shortcuts</span>
+            </div>
+          </summary>
+          <div class="panel-body">
+            <div class="row">
+              <div></div>
+              <button id="addPresetBtn" class="ghost" type="button">Add Preset</button>
+            </div>
+            <div id="presets" class="presets"></div>
+          </div>
+        </details>
       </div>
     </details>
 
-    <details class="panel" id="environment-panel">
+    <details class="panel" id="workspaces-panel">
       <summary class="panel-summary">
-        <span class="panel-caret" aria-hidden="true">
-          <span class="caret-closed">▸</span>
-          <span class="caret-open">▾</span>
-        </span>
         <div class="row-title">
-          <h2>Environment</h2>
-          <span class="hint hint-accent">API configuration and system prompt go here</span>
+          <h2>Workspaces</h2>
+          <span class="hint hint-accent">Namespace for sites and resources</span>
         </div>
       </summary>
       <div class="panel-body">
         <div class="row">
           <div></div>
-          <button id="addEnvConfigBtn" class="ghost" type="button">Add Config</button>
+          <button id="addWorkspaceBtn" class="ghost" type="button">Add Workspace</button>
         </div>
-        <div id="envConfigs" class="env-configs"></div>
+        <div id="workspaces" class="workspaces"></div>
       </div>
     </details>
 
-    <details class="panel" id="profiles-panel">
+    <details class="panel" id="sites-panel">
       <summary class="panel-summary">
-        <span class="panel-caret" aria-hidden="true">
-          <span class="caret-closed">▸</span>
-          <span class="caret-open">▾</span>
-        </span>
         <div class="row-title">
-          <h2>My Profiles</h2>
-          <span class="hint hint-accent">Text to your resumes or generic profiles goes here</span>
+          <h2>Sites</h2>
+          <span class="hint hint-accent">Configure known sites</span>
         </div>
       </summary>
       <div class="panel-body">
         <div class="row">
           <div></div>
-          <button id="addProfileBtn" class="ghost" type="button">Add Profile</button>
+          <button id="addSiteBtn" class="ghost" type="button">Add Site</button>
         </div>
-        <div id="profiles" class="profiles"></div>
-      </div>
-    </details>
-
-    <details class="panel" id="tasks-panel">
-      <summary class="panel-summary">
-        <span class="panel-caret" aria-hidden="true">
-          <span class="caret-closed">▸</span>
-          <span class="caret-open">▾</span>
-        </span>
-        <div class="row-title">
-          <h2>Task Presets</h2>
-          <span class="hint hint-accent">Top task is the default</span>
-        </div>
-      </summary>
-      <div class="panel-body">
-        <div class="row">
-          <div></div>
-          <button id="addTaskBtn" class="ghost" type="button">Add Task</button>
-        </div>
-        <div id="tasks" class="tasks"></div>
+        <div id="sites" class="sites"></div>
       </div>
     </details>
       </main>

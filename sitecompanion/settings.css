@@ -76,20 +76,75 @@ body {
 }
 
 .toc-links {
-  display: grid;
-  gap: 8px;
+  display: block;
 }
 
-.toc a {
+.toc ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.toc-sub {
+  padding-left: 12px !important;
+  margin-top: 2px !important;
+  display: none;
+}
+
+.toc-sub.expanded {
+  display: grid !important;
+}
+
+.toc-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.toc-item:hover {
+  background: var(--card-bg);
+}
+
+.toc-item .toc-caret {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.toc-item.expanded .toc-caret {
+  transform: rotate(90deg);
+}
+
+.toc li a {
+  display: block;
+  padding: 4px 6px;
+  border-radius: 6px;
   color: var(--ink);
   text-decoration: none;
   font-size: 12px;
-  padding: 4px 6px;
-  border-radius: 8px;
 }
 
-.toc a:hover {
+.toc li a:hover {
   background: var(--card-bg);
+}
+
+.toc-sub li a {
+  color: var(--muted);
+}
+
+.toc-sub li a:hover {
+  color: var(--ink);
 }
 
 .sidebar-errors {
@@ -139,8 +194,9 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 16px;
+  padding: 0;
   box-shadow: var(--panel-shadow);
+  overflow: hidden;
 }
 
 .panel-summary {
@@ -150,40 +206,58 @@ body {
   align-items: baseline;
   justify-content: flex-start;
   gap: 12px;
+  padding: 12px 16px;
+  margin: 0;
 }
 
-.panel-summary::-webkit-details-marker {
-  display: none;
+/* Restore native marker but keep list-style: none from above? No, remove list-style: none to show marker. */
+/* Wait, display: flex might hide marker in some browsers. */
+/* Usually marker is ::marker pseudo-element on summary. */
+/* To show native marker, summary should be display: list-item or similar? */
+/* Actually, standard is display: block (or list-item). Flex might kill it. */
+/* If the user wants native glyphs, I should use list-item and maybe position the h2? */
+
+/* Let's try reverting panel-summary to default display and styling h2 inline. */
+
+.panel-summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  margin: 0;
+  /* display: list-item; default */
 }
 
-.panel-caret {
-  display: inline-flex;
-  align-items: center;
-  width: 16px;
-  justify-content: center;
-  color: var(--muted);
-  font-weight: 700;
-  font-family: "Segoe UI Symbol", "Apple Symbols", system-ui, sans-serif;
-}
-
-.panel-caret .caret-open {
-  display: none;
-}
-
-.panel[open] .panel-caret .caret-open {
+/* Need to align H2. */
+.panel-summary h2 {
   display: inline;
 }
 
-.panel[open] .panel-caret .caret-closed {
-  display: none;
+.sub-panel .panel-summary {
+  padding: 10px 12px;
+}
+
+.sub-panel .panel-body {
+  padding: 0 12px 12px;
 }
 
 .panel-body {
-  margin-top: 12px;
+  margin-top: 0;
+  padding: 0 16px 16px;
 }
 
 .panel[open] .panel-summary {
-  margin-bottom: 6px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sub-panel {
+  box-shadow: none;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.sub-panel:last-child {
+  margin-bottom: 0;
 }
 
 .row {

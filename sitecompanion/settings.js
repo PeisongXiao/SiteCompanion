@@ -10,10 +10,17 @@ const addTaskBtn = document.getElementById("addTaskBtn");
 const tasksContainer = document.getElementById("tasks");
 const addProfileBtn = document.getElementById("addProfileBtn");
 const profilesContainer = document.getElementById("profiles");
+const addWorkspaceBtn = document.getElementById("addWorkspaceBtn");
+const workspacesContainer = document.getElementById("workspaces");
+const addSiteBtn = document.getElementById("addSiteBtn");
+const sitesContainer = document.getElementById("sites");
+const addPresetBtn = document.getElementById("addPresetBtn");
+const presetsContainer = document.getElementById("presets");
 const statusEl = document.getElementById("status");
 const statusSidebarEl = document.getElementById("statusSidebar");
 const sidebarErrorsEl = document.getElementById("sidebarErrors");
 const themeSelect = document.getElementById("themeSelect");
+const toolbarPositionSelect = document.getElementById("toolbarPositionSelect");
 
 const OPENAI_DEFAULTS = {
   apiBaseUrl: "https://api.openai.com/v1",
@@ -76,6 +83,21 @@ function newEnvConfigId() {
 function newProfileId() {
   if (crypto?.randomUUID) return crypto.randomUUID();
   return `profile-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function newWorkspaceId() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return `ws-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function newSiteId() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return `site-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function newPresetId() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return `preset-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
 function buildChatUrlFromBase(baseUrl) {
@@ -833,22 +855,7 @@ function updateTaskEnvOptions() {
   scheduleSidebarErrors();
 }
 
-function collectEnvConfigs() {
-  const cards = [...envConfigsContainer.querySelectorAll(".env-config-card")];
-  return cards.map((card) => {
-    const nameInput = card.querySelector(".env-config-name");
-    const apiSelect = card.querySelector(".env-config-api-select");
-    const promptInput = card.querySelector(".env-config-prompt");
-    return {
-      id: card.dataset.id || newEnvConfigId(),
-      name: (nameInput?.value || "Default").trim(),
-      apiConfigId: apiSelect?.value || "",
-      systemPrompt: (promptInput?.value || "").trim()
-    };
-  });
-}
-
-function buildProfileCard(profile) {
+function buildProfileCard(profile, container = profilesContainer) {
   const card = document.createElement("div");
   card.className = "profile-card";
   card.dataset.id = profile.id || newProfileId();
@@ -863,24 +870,6 @@ function buildProfileCard(profile) {
   nameInput.className = "profile-name";
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
-
-  const typeField = document.createElement("div");
-  typeField.className = "field";
-  const typeLabel = document.createElement("label");
-  typeLabel.textContent = "Type";
-  const typeSelect = document.createElement("select");
-  typeSelect.className = "profile-type";
-  const resumeOption = document.createElement("option");
-  resumeOption.value = "Resume";
-  resumeOption.textContent = "Resume";
-  const profileOption = document.createElement("option");
-  profileOption.value = "Profile";
-  profileOption.textContent = "Profile";
-  typeSelect.appendChild(resumeOption);
-  typeSelect.appendChild(profileOption);
-  typeSelect.value = profile.type === "Profile" ? "Profile" : "Resume";
-  typeField.appendChild(typeLabel);
-  typeField.appendChild(typeSelect);
 
   const textField = document.createElement("div");
   textField.className = "field";
@@ -913,46 +902,40 @@ function buildProfileCard(profile) {
   addBelowBtn.textContent = "Add";
 
   moveTopBtn.addEventListener("click", () => {
-    const first = profilesContainer.firstElementChild;
+    const first = container.firstElementChild;
     if (!first || first === card) return;
-    profilesContainer.insertBefore(card, first);
-    updateProfileControls();
+    container.insertBefore(card, first);
+    updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    profilesContainer.insertBefore(card, previous);
-    updateProfileControls();
+    container.insertBefore(card, previous);
+    updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    profilesContainer.insertBefore(card, next.nextElementSibling);
-    updateProfileControls();
+    container.insertBefore(card, next.nextElementSibling);
+    updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
-  actions.appendChild(moveTopBtn);
-  actions.appendChild(moveUpBtn);
-  actions.appendChild(moveDownBtn);
-  actions.appendChild(addBelowBtn);
-
   addBelowBtn.addEventListener("click", () => {
     const name = buildUniqueDefaultName(
-      collectNames(profilesContainer, ".profile-name")
+      collectNames(container, ".profile-name")
     );
     const newCard = buildProfileCard({
       id: newProfileId(),
       name,
-      text: "",
-      type: "Resume"
-    });
+      text: ""
+    }, container);
     card.insertAdjacentElement("afterend", newCard);
-    updateProfileControls();
+    updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
@@ -961,21 +944,19 @@ function buildProfileCard(profile) {
   duplicateBtn.className = "ghost duplicate";
   duplicateBtn.textContent = "Duplicate";
   duplicateBtn.addEventListener("click", () => {
-    const names = collectNames(profilesContainer, ".profile-name");
-    const copy = collectProfiles().find((entry) => entry.id === card.dataset.id) || {
+    const names = collectNames(container, ".profile-name");
+    const copy = collectProfiles(container).find((entry) => entry.id === card.dataset.id) || {
       id: card.dataset.id,
       name: nameInput.value || "Default",
-      text: textArea.value || "",
-      type: typeSelect.value || "Resume"
+      text: textArea.value || ""
     };
     const newCard = buildProfileCard({
       id: newProfileId(),
       name: ensureUniqueName(`${copy.name || "Default"} Copy`, names),
-      text: copy.text,
-      type: copy.type || "Resume"
-    });
+      text: copy.text
+    }, container);
     card.insertAdjacentElement("afterend", newCard);
-    updateProfileControls();
+    updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
@@ -985,40 +966,41 @@ function buildProfileCard(profile) {
   deleteBtn.textContent = "Delete";
   deleteBtn.addEventListener("click", () => {
     card.remove();
-    updateProfileControls();
+    updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
+  actions.appendChild(moveTopBtn);
+  actions.appendChild(moveUpBtn);
+  actions.appendChild(moveDownBtn);
+  actions.appendChild(addBelowBtn);
   actions.appendChild(duplicateBtn);
   actions.appendChild(deleteBtn);
 
   nameInput.addEventListener("input", () => updateTaskProfileOptions());
 
   card.appendChild(nameField);
-  card.appendChild(typeField);
   card.appendChild(textField);
   card.appendChild(actions);
 
   return card;
 }
 
-function collectProfiles() {
-  const cards = [...profilesContainer.querySelectorAll(".profile-card")];
+function collectProfiles(container = profilesContainer) {
+  const cards = [...container.querySelectorAll(".profile-card")];
   return cards.map((card) => {
     const nameInput = card.querySelector(".profile-name");
     const textArea = card.querySelector(".profile-text");
-    const typeSelect = card.querySelector(".profile-type");
     return {
       id: card.dataset.id || newProfileId(),
       name: (nameInput?.value || "Default").trim(),
-      text: (textArea?.value || "").trim(),
-      type: typeSelect?.value || "Resume"
+      text: (textArea?.value || "").trim()
     };
   });
 }
 
-function updateProfileControls() {
-  const cards = [...profilesContainer.querySelectorAll(".profile-card")];
+function updateProfileControls(container = profilesContainer) {
+  const cards = [...container.querySelectorAll(".profile-card")];
   cards.forEach((card, index) => {
     const moveTopBtn = card.querySelector(".move-top");
     const moveUpBtn = card.querySelector(".move-up");
@@ -1098,7 +1080,298 @@ function updateEnvApiOptions() {
   updateTaskEnvOptions();
 }
 
-function buildTaskCard(task) {
+function collectWorkspaces() {
+  const cards = [...workspacesContainer.querySelectorAll(".workspace-card")];
+  return cards.map((card) => {
+    const nameInput = card.querySelector(".workspace-name");
+    const themeSelect = card.querySelector(".workspace-theme");
+    
+    // Collect nested resources
+    const envsContainer = card.querySelector(".workspace-envs");
+    const profilesContainer = card.querySelector(".workspace-profiles");
+    const tasksContainer = card.querySelector(".workspace-tasks");
+    const presetsContainer = card.querySelector(".workspace-presets");
+
+    // We can reuse collect functions if they accept a container!
+    // But collectEnvConfigs currently returns objects with flat IDs. 
+    // We'll need to ensure we don't lose the nested nature or we handle it during save.
+    
+    // Actually, saveSettings stores workspaces array. If we put the resources inside, it works.
+    
+    return {
+      id: card.dataset.id || newWorkspaceId(),
+      name: (nameInput?.value || "Untitled Workspace").trim(),
+      theme: themeSelect?.value || "inherit",
+      envConfigs: envsContainer ? collectEnvConfigs(envsContainer) : [],
+      profiles: profilesContainer ? collectProfiles(profilesContainer) : [],
+      tasks: tasksContainer ? collectTasks(tasksContainer) : [],
+      presets: presetsContainer ? collectPresets(presetsContainer) : []
+    };
+  });
+}
+
+function collectPresets(container = presetsContainer) {
+  const cards = [...container.querySelectorAll(".preset-card")];
+  return cards.map((card) => {
+    const nameInput = card.querySelector(".preset-name");
+    const envSelect = card.querySelector(".preset-env");
+    const profileSelect = card.querySelector(".preset-profile");
+    const taskSelect = card.querySelector(".preset-task");
+    return {
+      id: card.dataset.id || newPresetId(),
+      name: (nameInput?.value || "Untitled Preset").trim(),
+      envId: envSelect?.value || "",
+      profileId: profileSelect?.value || "",
+      taskId: taskSelect?.value || ""
+    };
+  });
+}
+
+function collectEnvConfigs(container = envConfigsContainer) {
+  const cards = [...container.querySelectorAll(".env-config-card")];
+  return cards.map((card) => {
+    const nameInput = card.querySelector(".env-config-name");
+    const apiSelect = card.querySelector(".env-config-api-select");
+    const promptInput = card.querySelector(".env-config-prompt");
+    return {
+      id: card.dataset.id || newEnvConfigId(),
+      name: (nameInput?.value || "Default").trim(),
+      apiConfigId: apiSelect?.value || "",
+      systemPrompt: (promptInput?.value || "").trim()
+    };
+  });
+}
+
+function renderWorkspaceSection(title, containerClass, items, builder, newItemFactory) {
+  const details = document.createElement("details");
+  details.className = "panel sub-panel";
+  details.style.marginTop = "10px";
+  details.style.border = "1px solid var(--border)";
+  details.style.borderRadius = "8px";
+  details.style.padding = "8px";
+  
+  const summary = document.createElement("summary");
+  summary.className = "panel-summary";
+  summary.style.cursor = "pointer";
+  summary.innerHTML = `<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">${title}</h3>`;
+  details.appendChild(summary);
+
+  const body = document.createElement("div");
+  body.className = "panel-body";
+  body.style.paddingTop = "10px";
+  
+  const listContainer = document.createElement("div");
+  listContainer.className = containerClass;
+  
+  if (items && Array.isArray(items)) {
+    for (const item of items) {
+      listContainer.appendChild(builder(item, listContainer));
+    }
+  }
+
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.marginTop = "8px";
+  
+  const addBtn = document.createElement("button");
+  addBtn.className = "ghost";
+  addBtn.type = "button";
+  addBtn.textContent = "Add";
+  addBtn.addEventListener("click", () => {
+    const newItem = newItemFactory(listContainer);
+    const newCard = builder(newItem, listContainer);
+    listContainer.appendChild(newCard);
+    scheduleSidebarErrors();
+  });
+  
+  row.appendChild(addBtn);
+  body.appendChild(row);
+  body.appendChild(listContainer);
+  details.appendChild(body);
+  
+  return details;
+}
+
+function buildWorkspaceCard(ws) {
+  const card = document.createElement("div");
+  card.className = "workspace-card panel";
+  card.dataset.id = ws.id || newWorkspaceId();
+
+  const header = document.createElement("div");
+  header.className = "workspace-header";
+  
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = ws.name || "";
+  nameInput.className = "workspace-name";
+  nameInput.placeholder = "Workspace Name";
+  
+  const themeSelect = document.createElement("select");
+  themeSelect.className = "workspace-theme";
+  const themes = ["inherit", "light", "dark", "system"];
+  for (const t of themes) {
+    const opt = document.createElement("option");
+    opt.value = t;
+    opt.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+    themeSelect.appendChild(opt);
+  }
+  themeSelect.value = ws.theme || "inherit";
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "ghost delete";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.addEventListener("click", () => {
+    if (confirm(`Delete workspace "${ws.name}"? All items will move to global.`)) {
+      card.remove();
+      scheduleSidebarErrors();
+    }
+  });
+
+  header.appendChild(nameInput);
+  header.appendChild(themeSelect);
+  header.appendChild(deleteBtn);
+  card.appendChild(header);
+
+  // Subsections
+  const envSection = renderWorkspaceSection(
+    "Environments", 
+    "workspace-envs", 
+    ws.envConfigs, 
+    buildEnvConfigCard,
+    (container) => ({
+      id: newEnvConfigId(),
+      name: buildUniqueDefaultName(collectNames(container, ".env-config-name")),
+      apiConfigId: collectApiConfigs()[0]?.id || "",
+      systemPrompt: DEFAULT_SYSTEM_PROMPT
+    })
+  );
+  card.appendChild(envSection);
+
+  const profileSection = renderWorkspaceSection(
+    "Profiles",
+    "workspace-profiles",
+    ws.profiles,
+    buildProfileCard,
+    (container) => ({
+      id: newProfileId(),
+      name: buildUniqueDefaultName(collectNames(container, ".profile-name")),
+      text: ""
+    })
+  );
+  card.appendChild(profileSection);
+
+  const taskSection = renderWorkspaceSection(
+    "Tasks",
+    "workspace-tasks",
+    ws.tasks,
+    buildTaskCard,
+    (container) => ({
+      id: newTaskId(),
+      name: buildUniqueDefaultName(collectNames(container, ".task-name")),
+      text: "",
+      defaultEnvId: "",
+      defaultProfileId: ""
+    })
+  );
+  card.appendChild(taskSection);
+
+  const presetSection = renderWorkspaceSection(
+    "Presets",
+    "workspace-presets",
+    ws.presets,
+    buildPresetCard,
+    (container) => ({
+      id: newPresetId(),
+      name: "New Preset",
+      envId: "",
+      profileId: "",
+      taskId: ""
+    })
+  );
+  card.appendChild(presetSection);
+
+  return card;
+}
+
+function collectSites() {
+  const cards = [...sitesContainer.querySelectorAll(".site-card")];
+  return cards.map((card) => {
+    const patternInput = card.querySelector(".site-pattern");
+    const workspaceSelect = card.querySelector(".site-workspace");
+    return {
+      id: card.dataset.id || newSiteId(),
+      urlPattern: (patternInput?.value || "").trim(),
+      workspaceId: workspaceSelect?.value || "global"
+    };
+  });
+}
+
+function buildSiteCard(site) {
+  const card = document.createElement("div");
+  card.className = "site-card panel";
+  card.dataset.id = site.id || newSiteId();
+
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.alignItems = "flex-end";
+
+  const patternField = document.createElement("div");
+  patternField.className = "field";
+  patternField.style.flex = "1";
+  const patternLabel = document.createElement("label");
+  patternLabel.textContent = "URL Pattern";
+  const patternInput = document.createElement("input");
+  patternInput.type = "text";
+  patternInput.value = site.urlPattern || "";
+  patternInput.className = "site-pattern";
+  patternInput.placeholder = "example.com/*";
+  patternField.appendChild(patternLabel);
+  patternField.appendChild(patternInput);
+
+  const wsField = document.createElement("div");
+  wsField.className = "field";
+  const wsLabel = document.createElement("label");
+  wsLabel.textContent = "Workspace";
+  const wsSelect = document.createElement("select");
+  wsSelect.className = "site-workspace";
+  
+  // Populate workspaces
+  const workspaces = collectWorkspaces();
+  const globalOpt = document.createElement("option");
+  globalOpt.value = "global";
+  globalOpt.textContent = "Global";
+  wsSelect.appendChild(globalOpt);
+  
+  for (const ws of workspaces) {
+    const opt = document.createElement("option");
+    opt.value = ws.id;
+    opt.textContent = ws.name;
+    wsSelect.appendChild(opt);
+  }
+  wsSelect.value = site.workspaceId || "global";
+
+  wsField.appendChild(wsLabel);
+  wsField.appendChild(wsSelect);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "ghost delete";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.addEventListener("click", () => {
+    card.remove();
+    scheduleSidebarErrors();
+  });
+
+  row.appendChild(patternField);
+  row.appendChild(wsField);
+  row.appendChild(deleteBtn);
+  card.appendChild(row);
+
+  return card;
+}
+
+function buildTaskCard(task, container = tasksContainer) {
   const card = document.createElement("div");
   card.className = "task-card";
   card.dataset.id = task.id || newTaskId();
@@ -1137,7 +1410,7 @@ function buildTaskCard(task) {
   const textField = document.createElement("div");
   textField.className = "field";
   const textLabel = document.createElement("label");
-  textLabel.textContent = "Task prompt";
+  textLabel.textContent = "Task template";
   const textArea = document.createElement("textarea");
   textArea.rows = 6;
   textArea.value = task.text || "";
@@ -1151,63 +1424,51 @@ function buildTaskCard(task) {
   moveTopBtn.type = "button";
   moveTopBtn.className = "ghost move-top";
   moveTopBtn.textContent = "Top";
-  moveTopBtn.setAttribute("aria-label", "Move task to top");
-  moveTopBtn.setAttribute("title", "Move to top");
   const moveUpBtn = document.createElement("button");
   moveUpBtn.type = "button";
   moveUpBtn.className = "ghost move-up";
   moveUpBtn.textContent = "Up";
-  moveUpBtn.setAttribute("aria-label", "Move task up");
-  moveUpBtn.setAttribute("title", "Move up");
   const moveDownBtn = document.createElement("button");
   moveDownBtn.type = "button";
   moveDownBtn.className = "ghost move-down";
   moveDownBtn.textContent = "Down";
-  moveDownBtn.setAttribute("aria-label", "Move task down");
-  moveDownBtn.setAttribute("title", "Move down");
   const addBelowBtn = document.createElement("button");
   addBelowBtn.type = "button";
   addBelowBtn.className = "ghost add-below";
   addBelowBtn.textContent = "Add";
-  addBelowBtn.setAttribute("aria-label", "Add task below");
-  addBelowBtn.setAttribute("title", "Add below");
   const duplicateBtn = document.createElement("button");
   duplicateBtn.type = "button";
   duplicateBtn.className = "ghost duplicate";
   duplicateBtn.textContent = "Duplicate";
-  duplicateBtn.setAttribute("aria-label", "Duplicate task");
-  duplicateBtn.setAttribute("title", "Duplicate");
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "ghost delete";
   deleteBtn.textContent = "Delete";
-  deleteBtn.setAttribute("aria-label", "Delete task");
-  deleteBtn.setAttribute("title", "Delete");
 
   moveTopBtn.addEventListener("click", () => {
-    const first = tasksContainer.firstElementChild;
+    const first = container.firstElementChild;
     if (!first || first === card) return;
-    tasksContainer.insertBefore(card, first);
-    updateTaskControls();
+    container.insertBefore(card, first);
+    updateTaskControls(container);
   });
 
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    tasksContainer.insertBefore(card, previous);
-    updateTaskControls();
+    container.insertBefore(card, previous);
+    updateTaskControls(container);
   });
 
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    tasksContainer.insertBefore(card, next.nextElementSibling);
-    updateTaskControls();
+    container.insertBefore(card, next.nextElementSibling);
+    updateTaskControls(container);
   });
 
   addBelowBtn.addEventListener("click", () => {
     const name = buildUniqueDefaultName(
-      collectNames(tasksContainer, ".task-name")
+      collectNames(container, ".task-name")
     );
     const newCard = buildTaskCard({
       id: newTaskId(),
@@ -1215,9 +1476,9 @@ function buildTaskCard(task) {
       text: "",
       defaultEnvId: getTopEnvId(),
       defaultProfileId: getTopProfileId()
-    });
+    }, container);
     card.insertAdjacentElement("afterend", newCard);
-    updateTaskControls();
+    updateTaskControls(container);
     updateTaskEnvOptions();
     updateTaskProfileOptions();
   });
@@ -1227,22 +1488,22 @@ function buildTaskCard(task) {
       id: newTaskId(),
       name: ensureUniqueName(
         `${nameInput.value || "Untitled"} Copy`,
-        collectNames(tasksContainer, ".task-name")
+        collectNames(container, ".task-name")
       ),
       text: textArea.value,
       defaultEnvId: envSelect.value || "",
       defaultProfileId: profileSelect.value || ""
     };
-    const newCard = buildTaskCard(copy);
+    const newCard = buildTaskCard(copy, container);
     card.insertAdjacentElement("afterend", newCard);
-    updateTaskControls();
+    updateTaskControls(container);
     updateTaskEnvOptions();
     updateTaskProfileOptions();
   });
 
   deleteBtn.addEventListener("click", () => {
     card.remove();
-    updateTaskControls();
+    updateTaskControls(container);
   });
 
   actions.appendChild(moveTopBtn);
@@ -1261,8 +1522,111 @@ function buildTaskCard(task) {
   return card;
 }
 
-function updateTaskControls() {
-  const cards = [...tasksContainer.querySelectorAll(".task-card")];
+function collectPresets() {
+  const cards = [...presetsContainer.querySelectorAll(".preset-card")];
+  return cards.map((card) => {
+    const nameInput = card.querySelector(".preset-name");
+    const envSelect = card.querySelector(".preset-env");
+    const profileSelect = card.querySelector(".preset-profile");
+    const taskSelect = card.querySelector(".preset-task");
+    return {
+      id: card.dataset.id || newPresetId(),
+      name: (nameInput?.value || "Untitled Preset").trim(),
+      envId: envSelect?.value || "",
+      profileId: profileSelect?.value || "",
+      taskId: taskSelect?.value || ""
+    };
+  });
+}
+
+function buildPresetCard(preset) {
+  const card = document.createElement("div");
+  card.className = "preset-card";
+  card.dataset.id = preset.id || newPresetId();
+
+  const nameField = document.createElement("div");
+  nameField.className = "field";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = preset.name || "";
+  nameInput.className = "preset-name";
+  nameField.appendChild(nameLabel);
+  nameField.appendChild(nameInput);
+
+  const envField = document.createElement("div");
+  envField.className = "field";
+  const envLabel = document.createElement("label");
+  envLabel.textContent = "Environment";
+  const envSelect = document.createElement("select");
+  envSelect.className = "preset-env";
+  const envs = collectEnvConfigs(); // Global only for now
+  for (const env of envs) {
+    const opt = document.createElement("option");
+    opt.value = env.id;
+    opt.textContent = env.name;
+    envSelect.appendChild(opt);
+  }
+  envSelect.value = preset.envId || (envs[0]?.id || "");
+  envField.appendChild(envLabel);
+  envField.appendChild(envSelect);
+
+  const profileField = document.createElement("div");
+  profileField.className = "field";
+  const profileLabel = document.createElement("label");
+  profileLabel.textContent = "Profile";
+  const profileSelect = document.createElement("select");
+  profileSelect.className = "preset-profile";
+  const profiles = collectProfiles(); // Global only
+  for (const p of profiles) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    profileSelect.appendChild(opt);
+  }
+  profileSelect.value = preset.profileId || (profiles[0]?.id || "");
+  profileField.appendChild(profileLabel);
+  profileField.appendChild(profileSelect);
+
+  const taskField = document.createElement("div");
+  taskField.className = "field";
+  const taskLabel = document.createElement("label");
+  taskLabel.textContent = "Task";
+  const taskSelect = document.createElement("select");
+  taskSelect.className = "preset-task";
+  const tasks = collectTasks(); // Global only
+  for (const t of tasks) {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = t.name;
+    taskSelect.appendChild(opt);
+  }
+  taskSelect.value = preset.taskId || (tasks[0]?.id || "");
+  taskField.appendChild(taskLabel);
+  taskField.appendChild(taskSelect);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "ghost delete";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.style.marginTop = "8px";
+  deleteBtn.addEventListener("click", () => {
+    card.remove();
+    scheduleSidebarErrors();
+  });
+
+  card.appendChild(nameField);
+  card.appendChild(envField);
+  card.appendChild(profileField);
+  card.appendChild(taskField);
+  card.appendChild(deleteBtn);
+
+  return card;
+}
+
+function updateTaskControls(container = tasksContainer) {
+  const cards = [...container.querySelectorAll(".task-card")];
   cards.forEach((card, index) => {
     const moveTopBtn = card.querySelector(".move-top");
     const moveUpBtn = card.querySelector(".move-up");
@@ -1274,8 +1638,8 @@ function updateTaskControls() {
   scheduleSidebarErrors();
 }
 
-function collectTasks() {
-  const cards = [...tasksContainer.querySelectorAll(".task-card")];
+function collectTasks(container = tasksContainer) {
+  const cards = [...container.querySelectorAll(".task-card")];
   return cards.map((card) => {
     const nameInput = card.querySelector(".task-name");
     const textArea = card.querySelector(".task-text");
@@ -1418,7 +1782,11 @@ async function loadSettings() {
     systemPrompt = "",
     resume = "",
     tasks = [],
-    theme = "system"
+    presets = [],
+    theme = "system",
+    workspaces = [],
+    sites = [],
+    toolbarPosition = "bottom-right"
   } = await getStorage([
     "apiKey",
     "apiKeys",
@@ -1435,12 +1803,42 @@ async function loadSettings() {
     "systemPrompt",
     "resume",
     "tasks",
-    "theme"
+    "presets",
+    "theme",
+    "workspaces",
+    "sites",
+    "toolbarPosition"
   ]);
 
   themeSelect.value = theme;
   applyTheme(theme);
+  
+  if (toolbarPositionSelect) {
+    toolbarPositionSelect.value = toolbarPosition;
+  }
 
+  // Load basic resources first so they are available for presets/workspaces
+  envConfigsContainer.innerHTML = "";
+  // ... (existing logic handles this later)
+
+  // Wait, I need to make sure collectEnvConfigs etc work. 
+  // loadSettings currently renders cards later in the function.
+  // I need to ensure render order.
+  
+  // Actually, loadSettings renders cards in order. I should just add presets rendering at the end.
+  
+  workspacesContainer.innerHTML = "";
+  for (const ws of workspaces) {
+    workspacesContainer.appendChild(buildWorkspaceCard(ws));
+  }
+
+  sitesContainer.innerHTML = "";
+  for (const site of sites) {
+    sitesContainer.appendChild(buildSiteCard(site));
+  }
+  
+  // I'll render presets after tasks are rendered.
+  
   let resolvedKeys = Array.isArray(apiKeys) ? apiKeys : [];
   let resolvedActiveId = activeApiKeyId;
 
@@ -1649,15 +2047,25 @@ async function loadSettings() {
   updateTaskControls();
   updateTaskEnvOptions();
   updateTaskProfileOptions();
+
+  presetsContainer.innerHTML = "";
+  for (const preset of presets) {
+    presetsContainer.appendChild(buildPresetCard(preset));
+  }
+
   updateSidebarErrors();
+  updateToc(workspaces, sites);
 }
 
 async function saveSettings() {
   const tasks = collectTasks();
+  const presets = collectPresets();
   const apiKeys = collectApiKeys();
   const apiConfigs = collectApiConfigs();
   const envConfigs = collectEnvConfigs();
   const profiles = collectProfiles();
+  const workspaces = collectWorkspaces();
+  const sites = collectSites();
   const activeEnvConfigId = envConfigs[0]?.id || "";
   const activeEnv = envConfigs[0];
   const activeApiConfigId =
@@ -1676,9 +2084,12 @@ async function saveSettings() {
     activeEnvConfigId,
     systemPrompt: activeEnv?.systemPrompt || "",
     profiles,
-    resume: profiles[0]?.text || "",
     tasks,
-    theme: themeSelect.value
+    presets,
+    theme: themeSelect.value,
+    toolbarPosition: toolbarPositionSelect ? toolbarPositionSelect.value : "bottom-right",
+    workspaces,
+    sites
   });
   setStatus("Saved.");
 }
@@ -1697,14 +2108,14 @@ addTaskBtn.addEventListener("click", () => {
     text: "",
     defaultEnvId: getTopEnvId(),
     defaultProfileId: getTopProfileId()
-  });
+  }, tasksContainer);
   const first = tasksContainer.firstElementChild;
   if (first) {
     tasksContainer.insertBefore(newCard, first);
   } else {
     tasksContainer.appendChild(newCard);
   }
-  updateTaskControls();
+  updateTaskControls(tasksContainer);
   updateTaskEnvOptions();
   updateTaskProfileOptions();
 });
@@ -1779,17 +2190,50 @@ addProfileBtn.addEventListener("click", () => {
   const newCard = buildProfileCard({
     id: newProfileId(),
     name,
-    text: "",
-    type: "Resume"
-  });
+    text: ""
+  }, profilesContainer);
   const first = profilesContainer.firstElementChild;
   if (first) {
     profilesContainer.insertBefore(newCard, first);
   } else {
     profilesContainer.appendChild(newCard);
   }
-  updateProfileControls();
+  updateProfileControls(profilesContainer);
   updateTaskProfileOptions();
+});
+
+addWorkspaceBtn.addEventListener("click", () => {
+  const newCard = buildWorkspaceCard({
+    id: newWorkspaceId(),
+    name: "New Workspace",
+    theme: "inherit"
+  });
+  workspacesContainer.appendChild(newCard);
+  scheduleSidebarErrors();
+  updateToc(collectWorkspaces(), collectSites());
+});
+
+addSiteBtn.addEventListener("click", () => {
+  const newCard = buildSiteCard({
+    id: newSiteId(),
+    urlPattern: "",
+    workspaceId: "global"
+  });
+  sitesContainer.appendChild(newCard);
+  scheduleSidebarErrors();
+  updateToc(collectWorkspaces(), collectSites());
+});
+
+addPresetBtn.addEventListener("click", () => {
+  const newCard = buildPresetCard({
+    id: newPresetId(),
+    name: "New Preset",
+    envId: "",
+    profileId: "",
+    taskId: ""
+  });
+  presetsContainer.appendChild(newCard);
+  scheduleSidebarErrors();
 });
 
 themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
@@ -1797,16 +2241,151 @@ themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
 
 loadSettings();
 
-document.querySelectorAll(".toc a").forEach((link) => {
-  link.addEventListener("click", (event) => {
-    const href = link.getAttribute("href");
-    if (!href || !href.startsWith("#")) return;
-    const target = document.querySelector(href);
-    if (target && target.tagName === "DETAILS") {
-      target.open = true;
+function updateToc(workspaces, sites) {
+  const wsList = document.getElementById("toc-workspaces-list");
+  if (!wsList) return;
+  
+  wsList.innerHTML = "";
+  for (const ws of workspaces) {
+    const li = document.createElement("li");
+    
+    const itemDiv = document.createElement("div");
+    itemDiv.className = "toc-item";
+    
+    const caret = document.createElement("span");
+    caret.className = "toc-caret";
+    caret.textContent = "▸";
+    
+    const a = document.createElement("a");
+    a.href = "#";
+    a.textContent = ws.name || "Untitled";
+    
+    itemDiv.appendChild(caret);
+    itemDiv.appendChild(a);
+    
+    const subUl = document.createElement("ul");
+    subUl.className = "toc-sub hidden";
+    
+    const sections = ["Environments", "Profiles", "Tasks", "Presets"];
+    for (const section of sections) {
+        const subLi = document.createElement("li");
+        const subA = document.createElement("a");
+        subA.textContent = section;
+        subA.href = "#";
+        subA.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const card = document.querySelector(`.workspace-card[data-id="${ws.id}"]`);
+            if (card) {
+                // Find details with summary text containing section name
+                const details = [...card.querySelectorAll("details")].find(d => 
+                  d.querySelector(".panel-summary").textContent.includes(section)
+                );
+                if (details) {
+                    details.open = true;
+                    details.scrollIntoView({ behavior: "smooth", block: "start" });
+                    document.getElementById("workspaces-panel").open = true;
+                } else {
+                    card.scrollIntoView({ behavior: "smooth", block: "start" });
+                    document.getElementById("workspaces-panel").open = true;
+                }
+            }
+        });
+        subLi.appendChild(subA);
+        subUl.appendChild(subLi);
     }
-  });
-});
+    
+    itemDiv.addEventListener("click", (e) => {
+        // Toggle if not clicking the link directly
+        if (!e.target.closest("a")) {
+             e.preventDefault();
+             e.stopPropagation();
+             subUl.classList.toggle("expanded");
+             itemDiv.classList.toggle("expanded");
+        }
+    });
+    
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const card = document.querySelector(`.workspace-card[data-id="${ws.id}"]`);
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.getElementById("workspaces-panel").open = true;
+        
+        // Also expand sub-list
+        subUl.classList.add("expanded");
+        itemDiv.classList.add("expanded");
+      }
+    });
+
+    li.appendChild(itemDiv);
+    li.appendChild(subUl);
+    wsList.appendChild(li);
+  }
+  
+  const sitesList = document.getElementById("toc-sites-list");
+  if (sitesList) {
+    sitesList.innerHTML = "";
+    for (const site of sites) {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.textContent = site.urlPattern || "Untitled Site";
+        a.href = "#";
+        a.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
+            if (card) {
+                card.scrollIntoView({ behavior: "smooth", block: "center" });
+                document.getElementById("sites-panel").open = true;
+            }
+        });
+        li.appendChild(a);
+        sitesList.appendChild(li);
+    }
+  }
+}
+
+function initToc() {
+    const items = document.querySelectorAll(".toc-item");
+    items.forEach(item => {
+        item.addEventListener("click", (e) => {
+            const sub = item.nextElementSibling;
+            
+            // Handle link click
+            if (e.target.closest("a")) {
+                const link = e.target.closest("a");
+                const href = link.getAttribute("href");
+                if (href && href.startsWith("#")) {
+                    // Let default behavior happen? No, prevent default if we want smooth scroll/open
+                    // But here we rely on anchor.
+                    // Just expand TOC.
+                    if (sub && sub.classList.contains("toc-sub")) {
+                        sub.classList.add("expanded");
+                        item.classList.add("expanded");
+                    }
+                    // Open details
+                    const target = document.querySelector(href);
+                    if (target && target.tagName === "DETAILS") {
+                        target.open = true;
+                    }
+                }
+                return;
+            }
+
+            // Toggle sub-list on row click (excluding link)
+            if (sub && sub.classList.contains("toc-sub")) {
+                e.preventDefault();
+                e.stopPropagation();
+                sub.classList.toggle("expanded");
+                item.classList.toggle("expanded");
+            }
+        });
+    });
+}
+
+document.addEventListener("DOMContentLoaded", initToc);
 
 document.addEventListener("input", scheduleSidebarErrors);
 document.addEventListener("change", scheduleSidebarErrors);

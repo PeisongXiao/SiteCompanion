@@ -1,140 +1,143 @@
-const HEADER_LINES = new Set([
-  "OVERVIEW",
-  "PRE-SCREENING",
-  "WORK TERM RATINGS",
-  "JOB POSTING INFORMATION",
-  "APPLICATION INFORMATION",
-  "COMPANY INFORMATION",
-  "SERVICE TEAM"
-]);
+function findMinimumScope(text) {
+  if (!text) return null;
+  const normalized = text.trim();
+  if (!normalized) return null;
 
-const ACTION_BAR_SELECTOR = "nav.floating--action-bar";
-const INJECTED_ATTR = "data-wwcompanion-default-task";
-const DEFAULT_TASK_LABEL = "Default WWCompanion Task";
-
-function isJobPostingOpen() {
-  return document.getElementsByClassName("modal__content").length > 0;
-}
-
-function sanitizePostingText(text) {
-  let cleaned = text.replaceAll("fiber_manual_record", "");
-  const lines = cleaned.split(/\r?\n/);
-  const filtered = lines.filter((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return true;
-    return !HEADER_LINES.has(trimmed.toUpperCase());
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (node) => {
+      if (node.innerText.includes(normalized)) {
+        return NodeFilter.FILTER_ACCEPT;
+      }
+      return NodeFilter.FILTER_REJECT;
+    }
   });
 
-  cleaned = filtered.join("\n");
-  cleaned = cleaned.replace(/[ \t]+/g, " ");
-  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
-  return cleaned.trim();
-}
-
-function buildDefaultTaskButton(templateButton) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = DEFAULT_TASK_LABEL;
-  button.className = templateButton.className;
-  button.setAttribute(INJECTED_ATTR, "true");
-  button.setAttribute("aria-label", DEFAULT_TASK_LABEL);
-  button.addEventListener("click", () => {
-    document.dispatchEvent(new CustomEvent("WWCOMPANION_RUN_DEFAULT_TASK"));
-    chrome.runtime.sendMessage({ type: "RUN_DEFAULT_TASK" });
-  });
-  return button;
-}
-
-function getActionBars() {
-  return [...document.querySelectorAll(ACTION_BAR_SELECTOR)];
-}
-
-function getActionBarButtonCount(bar) {
-  return bar.querySelectorAll(`button:not([${INJECTED_ATTR}])`).length;
-}
-
-function selectTargetActionBar(bars) {
-  if (!bars.length) return null;
-  let best = bars[0];
-  let bestCount = getActionBarButtonCount(best);
-  for (const bar of bars.slice(1)) {
-    const count = getActionBarButtonCount(bar);
-    if (count > bestCount) {
-      best = bar;
-      bestCount = count;
-    }
-  }
-  return best;
-}
-
-function ensureDefaultTaskButton() {
-  const bars = getActionBars();
-  if (!bars.length) return;
-
-  if (!isJobPostingOpen()) {
-    for (const bar of bars) {
-      const injected = bar.querySelector(`[${INJECTED_ATTR}]`);
-      if (injected) injected.remove();
-    }
-    return;
+  let deepest = null;
+  let node = walker.nextNode();
+  while (node) {
+    deepest = node;
+    node = walker.nextNode();
   }
 
-  const toolbar = selectTargetActionBar(bars);
-  if (!toolbar) return;
+  return deepest;
+}
 
-  for (const bar of bars) {
-    if (bar === toolbar) continue;
-    const injected = bar.querySelector(`[${INJECTED_ATTR}]`);
-    if (injected) injected.remove();
+function createToolbar(presets, position = "bottom-right") {
+  let toolbar = document.getElementById("sitecompanion-toolbar");
+  if (toolbar) toolbar.remove();
+
+  toolbar = document.createElement("div");
+  toolbar.id = "sitecompanion-toolbar";
+  
+  let posStyle = "";
+  switch (position) {
+    case "top-left":
+      posStyle = "top: 20px; left: 20px;";
+      break;
+    case "top-right":
+      posStyle = "top: 20px; right: 20px;";
+      break;
+    case "bottom-left":
+      posStyle = "bottom: 20px; left: 20px;";
+      break;
+    case "bottom-center":
+      posStyle = "bottom: 20px; left: 50%; transform: translateX(-50%);";
+      break;
+    case "bottom-right":
+    default:
+      posStyle = "bottom: 20px; right: 20px;";
+      break;
   }
 
-  const existing = toolbar.querySelector(`[${INJECTED_ATTR}]`);
-  if (existing) return;
+  toolbar.style.cssText = `
+    position: fixed;
+    ${posStyle}
+    background: #fff7ec;
+    border: 1px solid #e4d6c5;
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    z-index: 999999;
+    display: flex;
+    gap: 8px;
+    font-family: system-ui, sans-serif;
+  `;
 
-  const templateButton = toolbar.querySelector("button");
-  if (!templateButton) return;
-
-  const button = buildDefaultTaskButton(templateButton);
-  const firstChild = toolbar.firstElementChild;
-  if (firstChild) {
-    toolbar.insertBefore(button, firstChild);
+  if (!presets || !presets.length) {
+    const label = document.createElement("span");
+    label.textContent = "SiteCompanion";
+    label.style.fontSize = "12px";
+    label.style.color = "#6b5f55";
+    toolbar.appendChild(label);
   } else {
-    toolbar.appendChild(button);
+    for (const preset of presets) {
+      const btn = document.createElement("button");
+      btn.textContent = preset.name;
+      btn.style.cssText = `
+        padding: 6px 12px;
+        background: #b14d2b;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 12px;
+      `;
+      btn.addEventListener("click", () => {
+        chrome.runtime.sendMessage({ type: "RUN_PRESET", presetId: preset.id });
+      });
+      toolbar.appendChild(btn);
+    }
+  }
+
+  document.body.appendChild(toolbar);
+}
+
+
+
+function matchUrl(url, pattern) {
+
+  if (!pattern) return false;
+
+  const regex = new RegExp("^" + pattern.split("*").join(".*") + "$");
+
+  try {
+
+    const urlObj = new URL(url);
+
+    const target = urlObj.hostname + urlObj.pathname;
+
+    return regex.test(target);
+
+  } catch {
+
+    return false;
+
+  }
+
+}
+
+
+
+async function refreshToolbar() {
+  const { sites = [], presets = [], toolbarPosition = "bottom-right" } = await chrome.storage.local.get(["sites", "presets", "toolbarPosition"]);
+  const currentUrl = window.location.href;
+  const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
+  
+  if (site) {
+    createToolbar(presets, toolbarPosition);
   }
 }
 
-function extractPostingText() {
-  const contents = [...document.getElementsByClassName("modal__content")];
-  if (!contents.length) {
-    return { ok: false, error: "No modal content found on this page." };
-  }
 
-  // WaterlooWorks renders multiple modal containers; choose the longest visible text block.
-  const el = contents.reduce((best, cur) =>
-    cur.innerText.length > best.innerText.length ? cur : best
-  );
-
-  const rawText = el.innerText;
-  const sanitized = sanitizePostingText(rawText);
-
-  return { ok: true, rawText, sanitized };
-}
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "EXTRACT_POSTING") return;
-
-  const result = extractPostingText();
-  sendResponse(result);
-});
-
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "wwcompanion-keepalive") return;
-  port.onDisconnect.addListener(() => {});
-});
 
 const observer = new MutationObserver(() => {
-  ensureDefaultTaskButton();
+
+  // refreshToolbar(); // Debounce this?
+
 });
 
-observer.observe(document.documentElement, { childList: true, subtree: true });
-ensureDefaultTaskButton();
+
+
+// observer.observe(document.documentElement, { childList: true, subtree: true });
+
+refreshToolbar();

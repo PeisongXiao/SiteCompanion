@@ -3,18 +3,46 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WWCompanion</title>
+    <title>SiteCompanion</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header class="title-block">
       <div class="title-line">
-        <span class="title">WWCompanion</span>
-        <span class="subtitle">AI companion for WaterlooWorks.</span>
+        <span class="title">SiteCompanion</span>
+        <span class="subtitle">AI companion for site-bound tasks.</span>
       </div>
     </header>
 
-    <section class="panel">
+    <section id="unknownSiteState" class="panel hidden">
+      <div class="state-body">
+        <p>This site is not recognized. Paste partial text from the page you want to extract:</p>
+        <textarea id="partialTextPaste" rows="4" placeholder="Paste some text here..."></textarea>
+        <div class="row">
+          <button id="extractFullBtn" class="accent">Try Extracting Full Text</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="extractionReviewState" class="panel hidden">
+      <div class="state-body">
+        <p>Review extracted text:</p>
+        <div id="extractedPreview" class="preview-box"></div>
+        <div class="field">
+          <label for="urlPatternInput">URL Match Pattern</label>
+          <input type="text" id="urlPatternInput" placeholder="example.com/*" />
+        </div>
+        <div class="row">
+          <button id="retryExtractBtn" class="ghost">Retry</button>
+          <button id="confirmSiteBtn" class="accent">Confirm</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="normalExecutionState" class="panel">
+      <div class="workspace-info">
+        Workspace: <span id="currentWorkspaceName">Global</span>
+      </div>
       <div class="controls-block">
         <div class="config-block">
           <div class="selector-row">
@@ -38,8 +66,8 @@
         </div>
       </div>
       <div class="meta">
-        <span id="postingCount">Posting: 0 chars</span>
-        <span id="promptCount">Prompt: 0 chars</span>
+        <span id="postingCount">Site Text: 0 chars</span>
+        <span id="promptCount">Task: 0 chars</span>
         <span id="status" class="status">Idle</span>
       </div>
     </section>

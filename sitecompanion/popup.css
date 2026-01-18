@@ -158,7 +158,63 @@ select {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
+}
+
+.state-body {
+  display: grid;
+  gap: 10px;
+}
+
+.state-body p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+textarea#partialTextPaste {
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--input-fg);
+  font-size: 12px;
+  resize: vertical;
+}
+
+.preview-box {
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--code-bg);
+  font-size: 11px;
+  white-space: pre-wrap;
+  border: 1px solid var(--border);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.workspace-info {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--input-fg);
+  font-size: 12px;
 }
 
 button {

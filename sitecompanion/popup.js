@@ -18,11 +18,26 @@ const LAST_TASK_KEY = "lastSelectedTaskId";
 const LAST_ENV_KEY = "lastSelectedEnvId";
 const LAST_PROFILE_KEY = "lastSelectedProfileId";
 
+const unknownSiteState = document.getElementById("unknownSiteState");
+const extractionReviewState = document.getElementById("extractionReviewState");
+const normalExecutionState = document.getElementById("normalExecutionState");
+const partialTextPaste = document.getElementById("partialTextPaste");
+const extractFullBtn = document.getElementById("extractFullBtn");
+const extractedPreview = document.getElementById("extractedPreview");
+const urlPatternInput = document.getElementById("urlPatternInput");
+const retryExtractBtn = document.getElementById("retryExtractBtn");
+const confirmSiteBtn = document.getElementById("confirmSiteBtn");
+const currentWorkspaceName = document.getElementById("currentWorkspaceName");
+
 const state = {
-  postingText: "",
+  siteText: "",
   tasks: [],
   envs: [],
   profiles: [],
+  sites: [],
+  workspaces: [],
+  currentSite: null,
+  currentWorkspace: null,
   port: null,
   isAnalyzing: false,
   outputRaw: "",
@@ -32,21 +47,65 @@ const state = {
   selectedProfileId: ""
 };
 
+async function switchState(stateName) {
+  unknownSiteState.classList.add("hidden");
+  extractionReviewState.classList.add("hidden");
+  normalExecutionState.classList.add("hidden");
+
+  if (stateName === "unknown") {
+    unknownSiteState.classList.remove("hidden");
+  } else if (stateName === "review") {
+    extractionReviewState.classList.remove("hidden");
+  } else if (stateName === "normal") {
+    normalExecutionState.classList.remove("hidden");
+  }
+  await chrome.storage.local.set({ lastPopupState: stateName });
+}
+
+function matchUrl(url, pattern) {
+  if (!pattern) return false;
+  const regex = new RegExp("^" + pattern.split("*").join(".*") + "$");
+  try {
+    const urlObj = new URL(url);
+    const target = urlObj.hostname + urlObj.pathname;
+    return regex.test(target);
+  } catch {
+    return false;
+  }
+}
+
+async function detectSite(url) {
+  const { sites = [], workspaces = [] } = await getStorage(["sites", "workspaces"]);
+  state.sites = sites;
+  state.workspaces = workspaces;
+  
+  const site = sites.find(s => matchUrl(url, s.urlPattern));
+  if (site) {
+    state.currentSite = site;
+    state.currentWorkspace = workspaces.find(w => w.id === site.workspaceId) || { name: "Global", id: "global" };
+    currentWorkspaceName.textContent = state.currentWorkspace.name;
+    switchState("normal");
+    return true;
+  }
+  
+  switchState("unknown");
+  return false;
+}
+
 function getStorage(keys) {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
 }
 
-function buildUserMessage(resume, resumeType, task, posting) {
-  const header = resumeType === "Profile" ? "=== PROFILE ===" : "=== RESUME ===";
+function buildUserMessage(profileText, taskText, siteText) {
   return [
-    header,
-    resume || "",
+    "=== Profile ===",
+    profileText || "",
     "",
-    "=== TASK ===",
-    task || "",
+    "=== Task ===",
+    taskText || "",
     "",
-    "=== JOB POSTING ===",
-    posting || ""
+    "=== Site Text ===",
+    siteText || ""
   ].join("\n");
 }
 
@@ -261,12 +320,12 @@ function setAnalyzing(isAnalyzing) {
   updateProfileSelectState();
 }
 
-function updatePostingCount() {
-  postingCountEl.textContent = `Posting: ${state.postingText.length} chars`;
+function updateSiteTextCount() {
+  postingCountEl.textContent = `Site Text: ${state.siteText.length} chars`;
 }
 
 function updatePromptCount(count) {
-  promptCountEl.textContent = `Prompt: ${count} chars`;
+  promptCountEl.textContent = `Task: ${count} chars`;
 }
 
 function renderTasks(tasks) {
@@ -399,14 +458,6 @@ async function persistSelections() {
   });
 }
 
-function isWaterlooWorksUrl(url) {
-  try {
-    return new URL(url).hostname === "waterlooworks.uwaterloo.ca";
-  } catch {
-    return false;
-  }
-}
-
 function sendToActiveTab(message) {
   return new Promise((resolve, reject) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -416,17 +467,12 @@ function sendToActiveTab(message) {
         return;
       }
 
-      if (!isWaterlooWorksUrl(tab.url || "")) {
-        reject(new Error("Open waterlooworks.uwaterloo.ca to use this."));
-        return;
-      }
-
       chrome.tabs.sendMessage(tab.id, message, (response) => {
         const error = chrome.runtime.lastError;
         if (error) {
           const msg =
             error.message && error.message.includes("Receiving end does not exist")
-              ? "Couldn't reach the page. Try refreshing WaterlooWorks and retry."
+              ? "Couldn't reach the page. Try refreshing and retry."
               : error.message;
           reject(new Error(msg));
           return;
@@ -486,6 +532,22 @@ function ensurePort() {
 }
 
 async function loadConfig() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const currentUrl = tabs[0]?.url || "";
+  
+  const { lastPopupState } = await getStorage(["lastPopupState"]);
+  await detectSite(currentUrl);
+  if (lastPopupState && lastPopupState !== "unknown") {
+    // If we had a state like 'review', we might want to stay there, 
+    // but detectSite might have switched to 'normal' if it matched.
+    // AGENTS.md says popup state must be persisted.
+    if (state.currentSite && lastPopupState === "normal") {
+       await switchState("normal");
+    } else if (!state.currentSite && (lastPopupState === "unknown" || lastPopupState === "review")) {
+       await switchState(lastPopupState);
+    }
+  }
+
   const stored = await getStorage([
     "tasks",
     "envConfigs",
@@ -548,40 +610,40 @@ async function loadTheme() {
 async function handleExtract() {
   setStatus("Extracting...");
   try {
-    const response = await sendToActiveTab({ type: "EXTRACT_POSTING" });
+    const response = await sendToActiveTab({ type: "EXTRACT_FULL" });
     if (!response?.ok) {
-      setStatus(response?.error || "No posting detected.");
+      setStatus(response?.error || "No text detected.");
       return false;
     }
 
-    state.postingText = response.sanitized || "";
-    updatePostingCount();
+    state.siteText = response.extracted || "";
+    updateSiteTextCount();
     updatePromptCount(0);
-    setStatus("Posting extracted.");
+    setStatus("Text extracted.");
     return true;
   } catch (error) {
-    setStatus(error.message || "Unable to extract posting.");
+    setStatus(error.message || "Unable to extract text.");
     return false;
   }
 }
 
 async function handleAnalyze() {
-  if (!state.postingText) {
-    setStatus("Extract a job posting first.");
+  if (!state.siteText) {
+    setStatus("Extract site text first.");
     return;
   }
 
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
-  if (!tab?.url || !isWaterlooWorksUrl(tab.url)) {
-    setStatus("Open waterlooworks.uwaterloo.ca to run tasks.");
+  if (!tab?.url) {
+    setStatus("Open a page to run tasks.");
     return;
   }
 
   const taskId = taskSelect.value;
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) {
-    setStatus("Select a task prompt.");
+    setStatus("Select a task.");
     return;
   }
 
@@ -640,8 +702,7 @@ async function handleAnalyze() {
   const activeProfile =
     resolvedProfiles.find((entry) => entry.id === selectedProfileId) ||
     resolvedProfiles[0];
-  const resumeText = activeProfile?.text || resume || "";
-  const resumeType = activeProfile?.type || "Resume";
+  const profileText = activeProfile?.text || resume || "";
   const isAdvanced = Boolean(activeConfig?.advanced);
   const resolvedApiUrl = activeConfig?.apiUrl || "";
   const resolvedTemplate = activeConfig?.requestTemplate || "";
@@ -688,10 +749,9 @@ async function handleAnalyze() {
   }
 
   const promptText = buildUserMessage(
-    resumeText,
-    resumeType,
+    profileText,
     task.text || "",
-    state.postingText
+    state.siteText
   );
   updatePromptCount(promptText.length);
 
@@ -713,10 +773,9 @@ async function handleAnalyze() {
       apiKeyPrefix: resolvedApiKeyPrefix,
       model: resolvedModel,
       systemPrompt: resolvedSystemPrompt,
-      resume: resumeText,
-      resumeType,
+      profileText,
       taskText: task.text || "",
-      postingText: state.postingText,
+      siteText: state.siteText,
       tabId: tab.id
     }
   });
@@ -769,6 +828,81 @@ function handleCopyRaw() {
   void copyTextToClipboard(text, "Markdown");
 }
 
+partialTextPaste.addEventListener("input", async () => {
+  const text = partialTextPaste.value.trim();
+  if (text.length < 5) return;
+
+  setStatus("Finding scope...");
+  try {
+    const response = await sendToActiveTab({ type: "FIND_SCOPE", text });
+    if (response?.ok) {
+      state.siteText = response.extracted;
+      extractedPreview.textContent = state.siteText;
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const url = new URL(tabs[0].url);
+      urlPatternInput.value = url.hostname + url.pathname + "*";
+      switchState("review");
+      setStatus("Review extraction.");
+    }
+  } catch (error) {
+    setStatus("Error finding scope.");
+  }
+});
+
+extractFullBtn.addEventListener("click", async () => {
+  setStatus("Extracting full text...");
+  try {
+    const response = await sendToActiveTab({ type: "EXTRACT_FULL" });
+    if (response?.ok) {
+      state.siteText = response.extracted;
+      extractedPreview.textContent = state.siteText;
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const url = new URL(tabs[0].url);
+      urlPatternInput.value = url.hostname + url.pathname + "*";
+      switchState("review");
+      setStatus("Review extraction.");
+    }
+  } catch (error) {
+    setStatus("Error extracting text.");
+  }
+});
+
+retryExtractBtn.addEventListener("click", () => {
+  switchState("unknown");
+  partialTextPaste.value = "";
+  setStatus("Ready.");
+});
+
+confirmSiteBtn.addEventListener("click", async () => {
+  const pattern = urlPatternInput.value.trim();
+  if (!pattern) {
+    setStatus("Enter a URL pattern.");
+    return;
+  }
+
+  // AGENTS.md: No URL pattern may be a substring of another.
+  const conflict = state.sites.find(s => s.urlPattern.includes(pattern) || pattern.includes(s.urlPattern));
+  if (conflict) {
+    setStatus("URL pattern conflict.");
+    return;
+  }
+
+  const newSite = {
+    id: `site-${Date.now()}`,
+    urlPattern: pattern,
+    workspaceId: "global" // Default to global for now
+  };
+
+  state.sites.push(newSite);
+  await chrome.storage.local.set({ sites: state.sites });
+  state.currentSite = newSite;
+  state.currentWorkspace = { name: "Global", id: "global" };
+  currentWorkspaceName.textContent = "Global";
+  switchState("normal");
+  updateSiteTextCount();
+  setStatus("Site saved.");
+});
+
 runBtn.addEventListener("click", handleExtractAndAnalyze);
 abortBtn.addEventListener("click", handleAbort);
 settingsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -788,7 +922,7 @@ profileSelect.addEventListener("change", () => {
   void persistSelections();
 });
 
-updatePostingCount();
+updateSiteTextCount();
 updatePromptCount(0);
 renderOutput();
 setAnalyzing(false);

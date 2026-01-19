@@ -6241,6 +6241,10 @@ function updateToc(workspaces, sites) {
       link.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const tocDetails = link.closest("details");
+        if (tocDetails && !tocDetails.open) {
+          openDetails(tocDetails);
+        }
         const card = document.querySelector(`.workspace-card[data-id="${ws.id}"]`);
         if (card) {
           const details = [...card.querySelectorAll("details")].find((d) => {
@@ -6294,7 +6298,7 @@ function updateToc(workspaces, sites) {
         card.scrollIntoView({ behavior: "smooth", block: "start" });
         openDetailsChain(document.getElementById("workspaces-panel"));
       }
-      details.open = true;
+      openDetails(details);
     });
 
     details.appendChild(subUl);
@@ -6383,6 +6387,10 @@ function updateToc(workspaces, sites) {
         link.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
+          const tocDetails = link.closest("details");
+          if (tocDetails && !tocDetails.open) {
+            openDetails(tocDetails);
+          }
           const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
           if (card) {
             const detailsMatch = [...card.querySelectorAll("details")].find((d) => {
@@ -6436,7 +6444,7 @@ function updateToc(workspaces, sites) {
           card.scrollIntoView({ behavior: "smooth", block: "center" });
           openDetailsChain(document.getElementById("sites-panel"));
         }
-        details.open = true;
+        openDetails(details);
       });
 
       details.appendChild(subUl);
@@ -6536,16 +6544,16 @@ function initToc() {
     const isSummaryLink = Boolean(link.closest("summary"));
     link.addEventListener("click", (e) => {
       const target = document.querySelector(href);
+      const tocDetails = link.closest("details");
+      if (isSummaryLink && tocDetails && !tocDetails.open) {
+        openDetails(tocDetails);
+      }
       if (target) {
         openDetailsChain(target);
-        if (!isSummaryLink) {
-          target.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
       }
-      if (!isSummaryLink) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      e.preventDefault();
+      e.stopPropagation();
     });
   });
   refreshTocTargets();

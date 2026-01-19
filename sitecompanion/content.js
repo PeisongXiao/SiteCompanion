@@ -393,7 +393,7 @@ function getToolbarThemeTokens(mode) {
   };
 }
 
-function createToolbar(shortcuts, position = "bottom-right", themeMode = "light") {
+function createToolbar(shortcuts, position = "bottom-right", themeMode = "light", options = {}) {
   let toolbar = document.getElementById("sitecompanion-toolbar");
   if (toolbar) toolbar.remove();
 
@@ -437,7 +437,27 @@ function createToolbar(shortcuts, position = "bottom-right", themeMode = "light"
     color: ${tokens.ink};
   `;
 
-  if (!shortcuts || !shortcuts.length) {
+  if (options?.unknown) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Open SiteCompanion";
+    btn.style.cssText = `
+        padding: 6px 12px;
+        background: ${tokens.accent};
+        color: #fff9f3;
+        border: 1px solid ${tokens.accent};
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 12px;
+        box-shadow: 0 8px 20px ${tokens.glow};
+      `;
+    btn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "OPEN_POPUP" }, () => {
+        void chrome.runtime.lastError;
+      });
+    });
+    toolbar.appendChild(btn);
+  } else if (!shortcuts || !shortcuts.length) {
     const label = document.createElement("span");
     label.textContent = "SiteCompanion";
     label.style.fontSize = "12px";
@@ -506,21 +526,29 @@ async function refreshToolbar() {
       shortcuts = [],
       presets = [],
       toolbarPosition = "bottom-right",
-      theme = "system"
+      theme = "system",
+      toolbarAutoHide = true
     } = await chrome.storage.local.get([
       "sites",
       "workspaces",
       "shortcuts",
       "presets",
       "toolbarPosition",
-      "theme"
+      "theme",
+      "toolbarAutoHide"
     ]);
     const currentUrl = window.location.href;
     const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
 
     if (!site) {
-      const toolbar = document.getElementById("sitecompanion-toolbar");
-      if (toolbar) toolbar.remove();
+      if (toolbarAutoHide) {
+        const toolbar = document.getElementById("sitecompanion-toolbar");
+        if (toolbar) toolbar.remove();
+        return;
+      }
+      const resolvedTheme = resolveThemeValue(theme, null, null);
+      const themeMode = resolveThemeMode(resolvedTheme);
+      createToolbar([], toolbarPosition, themeMode, { unknown: true });
       return;
     }
 

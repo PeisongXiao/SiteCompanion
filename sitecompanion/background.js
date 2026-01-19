@@ -342,6 +342,12 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "OPEN_POPUP") {
+    if (chrome.action?.openPopup) {
+      void chrome.action.openPopup().catch(() => {});
+    }
+    return;
+  }
   if (message?.type === "RUN_SHORTCUT") {
     const shortcutId = message.shortcutId || "";
     if (shortcutId) {

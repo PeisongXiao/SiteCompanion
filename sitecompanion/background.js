@@ -540,7 +540,7 @@ function buildTemplateBody(template, replacements) {
   try {
     return JSON.parse(filled);
   } catch {
-    throw new Error("Invalid request template JSON." + filled);
+    throw new Error("Invalid request template JSON.");
   }
 }
 

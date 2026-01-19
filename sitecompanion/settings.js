@@ -24,6 +24,18 @@ const alwaysShowOutput = document.getElementById("alwaysShowOutput");
 const globalSitesContainer = document.getElementById("globalSites");
 const toc = document.querySelector(".toc");
 const tocResizer = document.getElementById("tocResizer");
+const settingsLayout = document.querySelector(".settings-layout");
+let initialSiteIds = new Set();
+let lastSavedSnapshot = "";
+let hasUnsavedChanges = false;
+let dirtyCheckFrame = null;
+let statusClearTimer = null;
+let suppressDirtyTracking = true;
+let dirtyObserver = null;
+let tocTargets = [];
+let tocHighlightFrame = null;
+let activeTocLink = null;
+let tocTargetMap = new WeakMap();
 
 const OPENAI_DEFAULTS = {
   apiBaseUrl: "https://api.openai.com/v1"
@@ -278,12 +290,223 @@ function getStorage(keys) {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
 }
 
-function setStatus(message) {
-  if (statusSidebarEl) statusSidebarEl.textContent = message;
+const SETTINGS_VIEW_STATE_KEY = "settingsViewState";
+let settingsViewState = { open: {}, scrollTop: 0 };
+let settingsViewStateTimer = null;
+
+async function loadSettingsViewState() {
+  const stored = await getStorage([SETTINGS_VIEW_STATE_KEY]);
+  const state = stored[SETTINGS_VIEW_STATE_KEY];
+  if (!state || typeof state !== "object") return;
+  const open =
+    state.open && typeof state.open === "object" ? state.open : {};
+  settingsViewState = {
+    open,
+    scrollTop: Number.isFinite(state.scrollTop) ? state.scrollTop : 0
+  };
+}
+
+function scheduleSettingsViewStateSave() {
+  if (settingsViewStateTimer) clearTimeout(settingsViewStateTimer);
+  settingsViewStateTimer = setTimeout(() => {
+    settingsViewStateTimer = null;
+    void chrome.storage.local.set({
+      [SETTINGS_VIEW_STATE_KEY]: settingsViewState
+    });
+  }, 200);
+}
+
+function getDetailStateKey(details) {
+  return details?.dataset?.stateKey || details?.id || "";
+}
+
+function openDetails(details) {
+  if (!details) return;
+  details.open = true;
+  const key = getDetailStateKey(details);
+  if (!key) return;
+  settingsViewState.open[key] = true;
+  scheduleSettingsViewStateSave();
+}
+
+function centerCardInView(card) {
+  if (!card || typeof card.getBoundingClientRect !== "function") return;
+  requestAnimationFrame(() => {
+    if (!card.isConnected) return;
+    scrollCardToCenter(card);
+  });
+}
+
+function centerCardInViewAfterLayout(card, attempts = 4) {
+  if (!card || typeof card.getBoundingClientRect !== "function") return;
+  if (attempts <= 0) {
+    centerCardInView(card);
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (!card.isConnected) return;
+    const rect = card.getBoundingClientRect();
+    if (rect.height <= 0 || rect.width <= 0) {
+      centerCardInViewAfterLayout(card, attempts - 1);
+      return;
+    }
+    centerCardInView(card);
+  });
+}
+
+function registerDetail(details, defaultOpen) {
+  if (!details || details.dataset.stateReady === "true") return;
+  const key = getDetailStateKey(details);
+  if (!key) return;
+  details.dataset.stateReady = "true";
+  const storedOpen = settingsViewState.open?.[key];
+  if (typeof storedOpen === "boolean") {
+    details.open = storedOpen;
+  } else if (typeof defaultOpen === "boolean") {
+    details.open = defaultOpen;
+  }
+  details.addEventListener("toggle", () => {
+    settingsViewState.open[key] = details.open;
+    if (!details.open) {
+      collapseChildDetails(details);
+    }
+    scheduleSettingsViewStateSave();
+    scheduleTocHighlight();
+  });
+}
+
+function collapseChildDetails(parent) {
+  if (!parent) return;
+  const children = parent.querySelectorAll("details");
+  children.forEach((child) => {
+    if (child.open) {
+      child.open = false;
+      const childKey = getDetailStateKey(child);
+      if (childKey) {
+        settingsViewState.open[childKey] = false;
+      }
+    }
+  });
+}
+
+function registerAllDetails() {
+  const detailsList = document.querySelectorAll("details");
+  detailsList.forEach((details) => {
+    if (!details.dataset.stateKey && details.id) {
+      details.dataset.stateKey = details.id;
+    }
+    registerDetail(details, details.open);
+  });
+}
+
+function restoreScrollPosition() {
+  if (!Number.isFinite(settingsViewState.scrollTop)) return;
+  requestAnimationFrame(() => {
+    window.scrollTo(0, settingsViewState.scrollTop || 0);
+  });
+}
+
+function handleSettingsScroll() {
+  settingsViewState.scrollTop = window.scrollY || 0;
+  scheduleSettingsViewStateSave();
+  scheduleTocHighlight();
+}
+
+function setStatus(message, options = {}) {
+  if (!statusSidebarEl) return;
+  const { tone = "normal", persist = false, restoreDirty = true } = options;
+  if (statusClearTimer) {
+    clearTimeout(statusClearTimer);
+    statusClearTimer = null;
+  }
+  statusSidebarEl.textContent = message;
+  statusSidebarEl.classList.toggle("is-dirty", tone === "dirty");
   if (!message) return;
-  setTimeout(() => {
-    if (statusSidebarEl?.textContent === message) statusSidebarEl.textContent = "";
+  if (persist) return;
+  statusClearTimer = window.setTimeout(() => {
+    statusClearTimer = null;
+    if (statusSidebarEl?.textContent !== message) return;
+    if (hasUnsavedChanges && restoreDirty) {
+      setStatus("Unsaved changes.", {
+        tone: "dirty",
+        persist: true,
+        restoreDirty: false
+      });
+      return;
+    }
+    statusSidebarEl.textContent = "";
+    statusSidebarEl.classList.remove("is-dirty");
   }, 2000);
+}
+
+function buildSettingsSnapshot() {
+  return JSON.stringify({
+    apiKeys: collectApiKeys(),
+    apiConfigs: collectApiConfigs(),
+    envConfigs: collectEnvConfigs(),
+    profiles: collectProfiles(),
+    tasks: collectTasks(),
+    shortcuts: collectShortcuts(),
+    workspaces: collectWorkspaces(),
+    sites: collectSites(),
+    theme: themeSelect?.value || "system",
+    toolbarPosition: toolbarPositionSelect
+      ? toolbarPositionSelect.value
+      : "bottom-right",
+    toolbarAutoHide: toolbarAutoHide ? toolbarAutoHide.checked : true,
+    alwaysShowOutput: alwaysShowOutput ? alwaysShowOutput.checked : false
+  });
+}
+
+function setDirtyState(isDirty) {
+  if (hasUnsavedChanges === isDirty) return;
+  hasUnsavedChanges = isDirty;
+  if (hasUnsavedChanges) {
+    setStatus("Unsaved changes.", {
+      tone: "dirty",
+      persist: true,
+      restoreDirty: false
+    });
+    return;
+  }
+  if (statusSidebarEl?.classList.contains("is-dirty")) {
+    setStatus("");
+  }
+}
+
+function updateDirtyState() {
+  if (!lastSavedSnapshot) {
+    setDirtyState(false);
+    return;
+  }
+  const snapshot = buildSettingsSnapshot();
+  setDirtyState(snapshot !== lastSavedSnapshot);
+}
+
+function scheduleDirtyCheck() {
+  if (suppressDirtyTracking) return;
+  if (dirtyCheckFrame) return;
+  dirtyCheckFrame = requestAnimationFrame(() => {
+    dirtyCheckFrame = null;
+    updateDirtyState();
+  });
+}
+
+function captureSavedSnapshot() {
+  lastSavedSnapshot = buildSettingsSnapshot();
+  setDirtyState(false);
+}
+
+function initDirtyObserver() {
+  if (!settingsLayout || dirtyObserver) return;
+  dirtyObserver = new MutationObserver((mutations) => {
+    if (suppressDirtyTracking) return;
+    const hasChildChange = mutations.some(
+      (mutation) => mutation.type === "childList"
+    );
+    if (hasChildChange) scheduleDirtyCheck();
+  });
+  dirtyObserver.observe(settingsLayout, { childList: true, subtree: true });
 }
 
 let sidebarErrorFrame = null;
@@ -425,6 +648,18 @@ function buildUniqueDefaultName(names) {
   return `Default-${index}`;
 }
 
+function buildUniqueNumberedName(prefix, names) {
+  const base = (prefix || "").trim() || "New";
+  const lower = new Set(names.map((name) => name.toLowerCase()));
+  let index = 1;
+  let candidate = `${base}-${index}`;
+  while (lower.has(candidate.toLowerCase())) {
+    index += 1;
+    candidate = `${base}-${index}`;
+  }
+  return candidate;
+}
+
 function ensureUniqueName(desired, existingNames) {
   const trimmed = (desired || "").trim();
   const lowerNames = existingNames.map((name) => name.toLowerCase());
@@ -465,6 +700,116 @@ function populateSelect(select, items, emptyLabel) {
   }
 
   select.dataset.preferred = select.value;
+}
+
+function buildItemMap(items) {
+  const map = new Map();
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (item?.id) map.set(item.id, item);
+  });
+  return map;
+}
+
+function mergeById(...lists) {
+  const map = new Map();
+  lists.flat().forEach((item) => {
+    if (item?.id) map.set(item.id, item);
+  });
+  return [...map.values()];
+}
+
+function setupCardPanel(card, nameInput, fallbackTitle, options = {}) {
+  const { subPanel = true } = options;
+  card.open = false;
+  card.classList.add("panel");
+  if (subPanel) {
+    card.classList.add("sub-panel");
+  }
+  card.classList.add("settings-card");
+  const summary = document.createElement("summary");
+  summary.className = "panel-summary card-summary";
+  const row = document.createElement("div");
+  row.className = "panel-summary-row";
+  const summaryLeft = document.createElement("div");
+  summaryLeft.className = "panel-summary-left";
+  const summaryRight = document.createElement("div");
+  summaryRight.className = "panel-summary-right";
+  const rowTitle = document.createElement("span");
+  rowTitle.className = "row-title";
+  const title = document.createElement("span");
+  title.className = "card-title";
+  rowTitle.appendChild(title);
+  summaryLeft.appendChild(rowTitle);
+  row.appendChild(summaryLeft);
+  row.appendChild(summaryRight);
+  summary.appendChild(row);
+  const body = document.createElement("div");
+  body.className = "panel-body card-body";
+  card.appendChild(summary);
+  card.appendChild(body);
+
+  summary.addEventListener("click", (event) => {
+    if (event.target.closest("button")) {
+      event.preventDefault();
+    }
+  });
+
+  const updateTitle = () => {
+    const text = (nameInput?.value || "").trim();
+    title.textContent = text || fallbackTitle;
+  };
+  updateTitle();
+  if (nameInput) {
+    nameInput.addEventListener("input", updateTitle);
+  }
+
+  registerDetail(card, false);
+
+  return { body, summaryLeft, summaryRight, updateTitle };
+}
+
+function buildEnabledToggleButton(enabledInput) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "enabled-toggle ghost";
+
+  const updateState = () => {
+    const enabled = enabledInput.checked;
+    button.textContent = enabled ? "Enabled" : "Disabled";
+    button.classList.toggle("accent", enabled);
+    button.classList.toggle("ghost", !enabled);
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+  };
+
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    enabledInput.checked = !enabledInput.checked;
+    enabledInput.dispatchEvent(new Event("change", { bubbles: true }));
+    updateState();
+  });
+  enabledInput.addEventListener("change", updateState);
+  updateState();
+
+  return button;
+}
+
+function populateSelectPreserving(select, items, emptyLabel, allItemsById) {
+  const preferred = select.dataset.preferred || select.value;
+  populateSelect(select, items, emptyLabel);
+  if (!preferred) return;
+  const hasPreferred = [...select.options].some(
+    (option) => option.value === preferred
+  );
+  if (hasPreferred) return;
+  const fallback = allItemsById?.get(preferred);
+  if (!fallback) return;
+  const option = document.createElement("option");
+  option.value = preferred;
+  option.textContent = `${fallback.name || "Unavailable"} (disabled)`;
+  option.disabled = true;
+  select.appendChild(option);
+  select.value = preferred;
+  select.dataset.preferred = preferred;
 }
 
 function normalizeConfigList(list) {
@@ -558,7 +903,10 @@ function setApiConfigAdvanced(card, isAdvanced) {
   if (resetBtn) resetBtn.disabled = false;
 
   const advancedBtn = card.querySelector(".advanced-toggle");
-  if (advancedBtn) advancedBtn.disabled = isAdvanced;
+  if (advancedBtn) {
+    advancedBtn.disabled = false;
+    advancedBtn.classList.toggle("hidden", isAdvanced);
+  }
 }
 
 function readApiConfigFromCard(card) {
@@ -585,33 +933,39 @@ function readApiConfigFromCard(card) {
 }
 
 function buildApiConfigCard(config) {
-  const card = document.createElement("div");
+  const card = document.createElement("details");
   card.className = "api-config-card";
   card.dataset.id = config.id || newApiConfigId();
+  card.dataset.stateKey = `api-config:${card.dataset.id}`;
   const isAdvanced = Boolean(config.advanced);
 
-  const enabledLabel = document.createElement("label");
-  enabledLabel.className = "toggle-label";
   const enabledInput = document.createElement("input");
   enabledInput.type = "checkbox";
   enabledInput.className = "config-enabled";
   enabledInput.checked = config.enabled !== false;
   enabledInput.addEventListener("change", () => {
-    updateTaskEnvOptions();
+    updateEnvApiOptions();
   });
-  enabledLabel.appendChild(enabledInput);
-  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  enabledInput.classList.add("hidden");
 
-  const nameField = document.createElement("div");
-  nameField.className = "field";
   const nameLabel = document.createElement("label");
   nameLabel.textContent = "Name";
   const nameInput = document.createElement("input");
   nameInput.type = "text";
   nameInput.value = config.name || "";
   nameInput.className = "api-config-name";
+  const nameField = document.createElement("div");
+  nameField.className = "field";
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
+  const { body, summaryLeft, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled"
+  );
+  const enabledToggle = buildEnabledToggleButton(enabledInput);
+  summaryLeft.prepend(enabledToggle);
+  summaryLeft.appendChild(enabledInput);
 
   const keyField = document.createElement("div");
   keyField.className = "field";
@@ -636,7 +990,7 @@ function buildApiConfigCard(config) {
   baseField.appendChild(baseInput);
 
   const modelField = document.createElement("div");
-  modelField.className = "field basic-only";
+  modelField.className = "field basic-only api-config-model-field";
   const modelLabel = document.createElement("label");
   modelLabel.textContent = "Model name";
   const modelInput = document.createElement("input");
@@ -646,6 +1000,12 @@ function buildApiConfigCard(config) {
   modelInput.className = "api-config-model";
   modelField.appendChild(modelLabel);
   modelField.appendChild(modelInput);
+
+  const primaryRow = document.createElement("div");
+  primaryRow.className = "inline-fields api-config-primary";
+  primaryRow.appendChild(nameField);
+  primaryRow.appendChild(keyField);
+  primaryRow.appendChild(modelField);
 
   const urlField = document.createElement("div");
   urlField.className = "field advanced-only";
@@ -698,15 +1058,21 @@ function buildApiConfigCard(config) {
   moveDownBtn.type = "button";
   moveDownBtn.className = "ghost move-down";
   moveDownBtn.textContent = "Down";
+  const duplicateBtn = document.createElement("button");
+  duplicateBtn.type = "button";
+  duplicateBtn.className = "ghost duplicate";
+  duplicateBtn.textContent = "Duplicate";
   const addBelowBtn = document.createElement("button");
   addBelowBtn.type = "button";
-  addBelowBtn.className = "ghost add-below";
+  addBelowBtn.className = "accent add-below";
   addBelowBtn.textContent = "Add";
 
   moveTopBtn.addEventListener("click", () => {
     const first = apiConfigsContainer.firstElementChild;
     if (!first || first === card) return;
-    apiConfigsContainer.insertBefore(card, first);
+    animateCardMove(card, () => {
+      apiConfigsContainer.insertBefore(card, first);
+    }, { scrollToCenter: true });
     updateApiConfigControls();
     updateEnvApiOptions();
   });
@@ -714,7 +1080,9 @@ function buildApiConfigCard(config) {
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    apiConfigsContainer.insertBefore(card, previous);
+    animateCardMove(card, () => {
+      apiConfigsContainer.insertBefore(card, previous);
+    });
     updateApiConfigControls();
     updateEnvApiOptions();
   });
@@ -722,13 +1090,37 @@ function buildApiConfigCard(config) {
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    apiConfigsContainer.insertBefore(card, next.nextElementSibling);
+    animateCardMove(card, () => {
+      apiConfigsContainer.insertBefore(card, next.nextElementSibling);
+    });
     updateApiConfigControls();
     updateEnvApiOptions();
   });
 
+  duplicateBtn.addEventListener("click", () => {
+    const sourceRect = card.getBoundingClientRect();
+    const source = readApiConfigFromCard(card);
+    const names = collectNames(apiConfigsContainer, ".api-config-name");
+    const nameValue = source.name || "Default";
+    const copy = {
+      ...source,
+      id: newApiConfigId(),
+      name: ensureUniqueName(`${nameValue} Copy`, names)
+    };
+    const newCard = buildApiConfigCard(copy);
+    card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    animateDuplicateFromRect(newCard, sourceRect);
+    updateApiConfigKeyOptions();
+    updateEnvApiOptions();
+    updateApiConfigControls();
+    scheduleSidebarErrors();
+    centerCardInViewAfterLayout(newCard);
+  });
+
   addBelowBtn.addEventListener("click", () => {
-    const name = buildUniqueDefaultName(
+    const name = buildUniqueNumberedName(
+      "New API",
       collectNames(apiConfigsContainer, ".api-config-name")
     );
     const newCard = buildApiConfigCard({
@@ -741,6 +1133,8 @@ function buildApiConfigCard(config) {
       advanced: false
     });
     card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
     updateApiConfigKeyOptions();
     updateEnvApiOptions();
     updateApiConfigControls();
@@ -799,6 +1193,7 @@ function buildApiConfigCard(config) {
   rightActions.appendChild(moveTopBtn);
   rightActions.appendChild(moveUpBtn);
   rightActions.appendChild(moveDownBtn);
+  rightActions.appendChild(duplicateBtn);
   rightActions.appendChild(addBelowBtn);
   rightActions.appendChild(deleteBtn);
 
@@ -808,14 +1203,11 @@ function buildApiConfigCard(config) {
   actions.appendChild(leftActions);
   actions.appendChild(rightActions);
 
-  card.appendChild(enabledLabel);
-  card.appendChild(nameField);
-  card.appendChild(keyField);
-  card.appendChild(baseField);
-  card.appendChild(modelField);
-  card.appendChild(urlField);
-  card.appendChild(templateField);
-  card.appendChild(actions);
+  body.appendChild(primaryRow);
+  body.appendChild(baseField);
+  body.appendChild(urlField);
+  body.appendChild(templateField);
+  summaryRight.appendChild(actions);
 
   setApiConfigAdvanced(card, isAdvanced);
 
@@ -841,12 +1233,11 @@ function updateApiConfigControls() {
 }
 
 function buildApiKeyCard(entry) {
-  const card = document.createElement("div");
+  const card = document.createElement("details");
   card.className = "api-key-card";
   card.dataset.id = entry.id || newApiKeyId();
+  card.dataset.stateKey = `api-key:${card.dataset.id}`;
 
-  const enabledLabel = document.createElement("label");
-  enabledLabel.className = "toggle-label";
   const enabledInput = document.createElement("input");
   enabledInput.type = "checkbox";
   enabledInput.className = "config-enabled";
@@ -854,8 +1245,7 @@ function buildApiKeyCard(entry) {
   enabledInput.addEventListener("change", () => {
     updateApiConfigKeyOptions();
   });
-  enabledLabel.appendChild(enabledInput);
-  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  enabledInput.classList.add("hidden");
 
   const nameField = document.createElement("div");
   nameField.className = "field";
@@ -865,6 +1255,14 @@ function buildApiKeyCard(entry) {
   nameInput.type = "text";
   nameInput.value = entry.name || "";
   nameInput.className = "api-key-name";
+  const { body, summaryLeft, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled"
+  );
+  const enabledToggle = buildEnabledToggleButton(enabledInput);
+  summaryLeft.prepend(enabledToggle);
+  summaryLeft.appendChild(enabledInput);
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
 
@@ -910,13 +1308,15 @@ function buildApiKeyCard(entry) {
   moveDownBtn.textContent = "Down";
   const addBelowBtn = document.createElement("button");
   addBelowBtn.type = "button";
-  addBelowBtn.className = "ghost add-below";
+  addBelowBtn.className = "accent add-below";
   addBelowBtn.textContent = "Add";
 
   moveTopBtn.addEventListener("click", () => {
     const first = apiKeysContainer.firstElementChild;
     if (!first || first === card) return;
-    apiKeysContainer.insertBefore(card, first);
+    animateCardMove(card, () => {
+      apiKeysContainer.insertBefore(card, first);
+    }, { scrollToCenter: true });
     updateApiKeyControls();
     updateApiConfigKeyOptions();
   });
@@ -924,7 +1324,9 @@ function buildApiKeyCard(entry) {
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    apiKeysContainer.insertBefore(card, previous);
+    animateCardMove(card, () => {
+      apiKeysContainer.insertBefore(card, previous);
+    });
     updateApiKeyControls();
     updateApiConfigKeyOptions();
   });
@@ -932,7 +1334,9 @@ function buildApiKeyCard(entry) {
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    apiKeysContainer.insertBefore(card, next.nextElementSibling);
+    animateCardMove(card, () => {
+      apiKeysContainer.insertBefore(card, next.nextElementSibling);
+    });
     updateApiKeyControls();
     updateApiConfigKeyOptions();
   });
@@ -943,6 +1347,8 @@ function buildApiKeyCard(entry) {
     );
     const newCard = buildApiKeyCard({ id: newApiKeyId(), name, key: "" });
     card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
     updateApiConfigKeyOptions();
     updateApiKeyControls();
   });
@@ -950,7 +1356,6 @@ function buildApiKeyCard(entry) {
   actions.appendChild(moveTopBtn);
   actions.appendChild(moveUpBtn);
   actions.appendChild(moveDownBtn);
-  actions.appendChild(addBelowBtn);
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "ghost delete";
@@ -966,10 +1371,9 @@ function buildApiKeyCard(entry) {
   nameInput.addEventListener("input", updateSelect);
   keyInput.addEventListener("input", updateSelect);
 
-  card.appendChild(enabledLabel);
-  card.appendChild(nameField);
-  card.appendChild(keyField);
-  card.appendChild(actions);
+  body.appendChild(nameField);
+  body.appendChild(keyField);
+  summaryRight.appendChild(actions);
 
   return card;
 }
@@ -1036,12 +1440,11 @@ function updateApiConfigKeyOptions() {
 }
 
 function buildEnvConfigCard(config, container = envConfigsContainer) {
-  const card = document.createElement("div");
+  const card = document.createElement("details");
   card.className = "env-config-card";
   card.dataset.id = config.id || newEnvConfigId();
+  card.dataset.stateKey = `env:${card.dataset.id}`;
 
-  const enabledLabel = document.createElement("label");
-  enabledLabel.className = "toggle-label";
   const enabledInput = document.createElement("input");
   enabledInput.type = "checkbox";
   enabledInput.className = "config-enabled";
@@ -1049,8 +1452,7 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   enabledInput.addEventListener("change", () => {
     updateEnvApiOptions();
   });
-  enabledLabel.appendChild(enabledInput);
-  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  enabledInput.classList.add("hidden");
 
   const nameField = document.createElement("div");
   nameField.className = "field";
@@ -1060,6 +1462,14 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   nameInput.type = "text";
   nameInput.value = config.name || "";
   nameInput.className = "env-config-name";
+  const { body, summaryLeft, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled"
+  );
+  const enabledToggle = buildEnabledToggleButton(enabledInput);
+  summaryLeft.prepend(enabledToggle);
+  summaryLeft.appendChild(enabledInput);
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
 
@@ -1083,6 +1493,10 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   promptInput.className = "env-config-prompt";
   promptField.appendChild(promptLabel);
   promptField.appendChild(promptInput);
+  const primaryRow = document.createElement("div");
+  primaryRow.className = "inline-fields two env-config-primary";
+  primaryRow.appendChild(nameField);
+  primaryRow.appendChild(apiField);
 
   const actions = document.createElement("div");
   actions.className = "env-config-actions";
@@ -1100,13 +1514,15 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   moveDownBtn.textContent = "Down";
   const addBelowBtn = document.createElement("button");
   addBelowBtn.type = "button";
-  addBelowBtn.className = "ghost add-below";
+  addBelowBtn.className = "accent add-below";
   addBelowBtn.textContent = "Add";
 
   moveTopBtn.addEventListener("click", () => {
     const first = container.firstElementChild;
     if (!first || first === card) return;
-    container.insertBefore(card, first);
+    animateCardMove(card, () => {
+      container.insertBefore(card, first);
+    }, { scrollToCenter: true });
     updateEnvControls(container);
     updateTaskEnvOptions();
   });
@@ -1114,7 +1530,9 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    container.insertBefore(card, previous);
+    animateCardMove(card, () => {
+      container.insertBefore(card, previous);
+    });
     updateEnvControls(container);
     updateTaskEnvOptions();
   });
@@ -1122,7 +1540,9 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    container.insertBefore(card, next.nextElementSibling);
+    animateCardMove(card, () => {
+      container.insertBefore(card, next.nextElementSibling);
+    });
     updateEnvControls(container);
     updateTaskEnvOptions();
   });
@@ -1130,10 +1550,11 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
   actions.appendChild(moveTopBtn);
   actions.appendChild(moveUpBtn);
   actions.appendChild(moveDownBtn);
-  actions.appendChild(addBelowBtn);
 
+  const moveControls = buildMoveControls("envs", card, container);
   addBelowBtn.addEventListener("click", () => {
-    const name = buildUniqueDefaultName(
+    const name = buildUniqueNumberedName(
+      "New Environment",
       collectNames(container, ".env-config-name")
     );
     const fallbackApiConfigId = getApiConfigsForEnvContainer(container)[0]?.id || "";
@@ -1144,18 +1565,36 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
       systemPrompt: DEFAULT_SYSTEM_PROMPT
     }, container);
     card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
     updateEnvApiOptions();
     updateEnvControls(container);
     updateTaskEnvOptions();
   });
 
-  const duplicateControls = buildDuplicateControls("envs", () => ({
+  const getSourceData = () => ({
     id: card.dataset.id,
     name: nameInput.value || "Default",
     apiConfigId: apiSelect.value || "",
     systemPrompt: promptInput.value || "",
     enabled: enabledInput.checked
-  }));
+  });
+  const duplicateControls = buildDuplicateControls("envs", getSourceData, {
+    onHere: () => {
+      const sourceRect = card.getBoundingClientRect();
+      const newCard = buildDuplicateCard("envs", getSourceData(), container);
+      if (!newCard) return;
+      card.insertAdjacentElement("afterend", newCard);
+      openDetails(newCard);
+      animateDuplicateFromRect(newCard, sourceRect);
+      updateEnvApiOptions();
+      updateEnvControls(container);
+      updateTaskEnvOptions();
+      scheduleSidebarErrors();
+      centerCardInViewAfterLayout(newCard);
+    },
+    sourceCard: card
+  });
 
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
@@ -1167,15 +1606,15 @@ function buildEnvConfigCard(config, container = envConfigsContainer) {
     updateTaskEnvOptions();
   });
 
+  actions.appendChild(moveControls);
   actions.appendChild(duplicateControls);
+  actions.appendChild(addBelowBtn);
   actions.appendChild(deleteBtn);
   nameInput.addEventListener("input", () => updateEnvApiOptions());
 
-  card.appendChild(enabledLabel);
-  card.appendChild(nameField);
-  card.appendChild(apiField);
-  card.appendChild(promptField);
-  card.appendChild(actions);
+  body.appendChild(primaryRow);
+  body.appendChild(promptField);
+  summaryRight.appendChild(actions);
 
   return card;
 }
@@ -1193,33 +1632,56 @@ function updateEnvControls(container = envConfigsContainer) {
   scheduleSidebarErrors();
 }
 
-function updateTaskEnvOptionsForContainer(container, envs) {
+function updateTaskEnvOptionsForContainer(container, envs, allEnvsById) {
   if (!container) return;
   const selects = container.querySelectorAll(".task-env-select");
   selects.forEach((select) => {
-    populateSelect(select, envs, "No environments configured");
+    populateSelectPreserving(
+      select,
+      envs,
+      "No environments configured",
+      allEnvsById
+    );
   });
 }
 
 function updateTaskEnvOptions() {
-  const envs = collectEnvConfigs().filter((env) => isEnabled(env.enabled));
-  updateTaskEnvOptionsForContainer(tasksContainer, envs);
+  const allGlobalEnvs = collectEnvConfigs();
+  const enabledGlobalEnvs = allGlobalEnvs.filter((env) => isEnabled(env.enabled));
+  updateTaskEnvOptionsForContainer(
+    tasksContainer,
+    enabledGlobalEnvs,
+    buildItemMap(allGlobalEnvs)
+  );
 
   const workspaceCards = document.querySelectorAll(".workspace-card");
   workspaceCards.forEach((card) => {
     const scope = getWorkspaceScopeData(card);
+    const workspaceEnvs = collectEnvConfigs(card.querySelector(".workspace-envs"));
+    const allEnvs = mergeById(allGlobalEnvs, workspaceEnvs);
     updateTaskEnvOptionsForContainer(
       card.querySelector(".workspace-tasks"),
-      scope.envs
+      scope.envs,
+      buildItemMap(allEnvs)
     );
   });
 
   const siteCards = document.querySelectorAll(".site-card");
   siteCards.forEach((card) => {
     const scope = getSiteScopeData(card);
+    const workspaceId = card.querySelector(".site-workspace")?.value || "global";
+    const workspaceCard = document.querySelector(
+      `.workspace-card[data-id="${workspaceId}"]`
+    );
+    const workspaceEnvs = workspaceCard
+      ? collectEnvConfigs(workspaceCard.querySelector(".workspace-envs"))
+      : [];
+    const siteEnvs = collectEnvConfigs(card.querySelector(".site-envs"));
+    const allEnvs = mergeById(allGlobalEnvs, workspaceEnvs, siteEnvs);
     updateTaskEnvOptionsForContainer(
       card.querySelector(".site-tasks"),
-      scope.envs
+      scope.envs,
+      buildItemMap(allEnvs)
     );
   });
 
@@ -1230,12 +1692,11 @@ function updateTaskEnvOptions() {
 }
 
 function buildProfileCard(profile, container = profilesContainer) {
-  const card = document.createElement("div");
+  const card = document.createElement("details");
   card.className = "profile-card";
   card.dataset.id = profile.id || newProfileId();
+  card.dataset.stateKey = `profile:${card.dataset.id}`;
 
-  const enabledLabel = document.createElement("label");
-  enabledLabel.className = "toggle-label";
   const enabledInput = document.createElement("input");
   enabledInput.type = "checkbox";
   enabledInput.className = "config-enabled";
@@ -1243,8 +1704,7 @@ function buildProfileCard(profile, container = profilesContainer) {
   enabledInput.addEventListener("change", () => {
     updateTaskProfileOptions();
   });
-  enabledLabel.appendChild(enabledInput);
-  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  enabledInput.classList.add("hidden");
 
   const nameField = document.createElement("div");
   nameField.className = "field";
@@ -1254,6 +1714,14 @@ function buildProfileCard(profile, container = profilesContainer) {
   nameInput.type = "text";
   nameInput.value = profile.name || "";
   nameInput.className = "profile-name";
+  const { body, summaryLeft, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled"
+  );
+  const enabledToggle = buildEnabledToggleButton(enabledInput);
+  summaryLeft.prepend(enabledToggle);
+  summaryLeft.appendChild(enabledInput);
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
 
@@ -1284,13 +1752,15 @@ function buildProfileCard(profile, container = profilesContainer) {
   moveDownBtn.textContent = "Down";
   const addBelowBtn = document.createElement("button");
   addBelowBtn.type = "button";
-  addBelowBtn.className = "ghost add-below";
+  addBelowBtn.className = "accent add-below";
   addBelowBtn.textContent = "Add";
 
   moveTopBtn.addEventListener("click", () => {
     const first = container.firstElementChild;
     if (!first || first === card) return;
-    container.insertBefore(card, first);
+    animateCardMove(card, () => {
+      container.insertBefore(card, first);
+    }, { scrollToCenter: true });
     updateProfileControls(container);
     updateTaskProfileOptions();
   });
@@ -1298,7 +1768,9 @@ function buildProfileCard(profile, container = profilesContainer) {
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    container.insertBefore(card, previous);
+    animateCardMove(card, () => {
+      container.insertBefore(card, previous);
+    });
     updateProfileControls(container);
     updateTaskProfileOptions();
   });
@@ -1306,13 +1778,16 @@ function buildProfileCard(profile, container = profilesContainer) {
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    container.insertBefore(card, next.nextElementSibling);
+    animateCardMove(card, () => {
+      container.insertBefore(card, next.nextElementSibling);
+    });
     updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
   addBelowBtn.addEventListener("click", () => {
-    const name = buildUniqueDefaultName(
+    const name = buildUniqueNumberedName(
+      "New Profile",
       collectNames(container, ".profile-name")
     );
     const newCard = buildProfileCard({
@@ -1321,16 +1796,33 @@ function buildProfileCard(profile, container = profilesContainer) {
       text: ""
     }, container);
     card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
     updateProfileControls(container);
     updateTaskProfileOptions();
   });
 
-  const duplicateControls = buildDuplicateControls("profiles", () => ({
+  const getSourceData = () => ({
     id: card.dataset.id,
     name: nameInput.value || "Default",
     text: textArea.value || "",
     enabled: enabledInput.checked
-  }));
+  });
+  const duplicateControls = buildDuplicateControls("profiles", getSourceData, {
+    onHere: () => {
+      const sourceRect = card.getBoundingClientRect();
+      const newCard = buildDuplicateCard("profiles", getSourceData(), container);
+      if (!newCard) return;
+      card.insertAdjacentElement("afterend", newCard);
+      openDetails(newCard);
+      animateDuplicateFromRect(newCard, sourceRect);
+      updateProfileControls(container);
+      updateTaskProfileOptions();
+      scheduleSidebarErrors();
+      centerCardInViewAfterLayout(newCard);
+    },
+    sourceCard: card
+  });
 
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
@@ -1345,16 +1837,17 @@ function buildProfileCard(profile, container = profilesContainer) {
   actions.appendChild(moveTopBtn);
   actions.appendChild(moveUpBtn);
   actions.appendChild(moveDownBtn);
-  actions.appendChild(addBelowBtn);
+  const moveControls = buildMoveControls("profiles", card, container);
+  actions.appendChild(moveControls);
   actions.appendChild(duplicateControls);
+  actions.appendChild(addBelowBtn);
   actions.appendChild(deleteBtn);
 
   nameInput.addEventListener("input", () => updateTaskProfileOptions());
 
-  card.appendChild(enabledLabel);
-  card.appendChild(nameField);
-  card.appendChild(textField);
-  card.appendChild(actions);
+  body.appendChild(nameField);
+  body.appendChild(textField);
+  summaryRight.appendChild(actions);
 
   return card;
 }
@@ -1388,33 +1881,64 @@ function updateProfileControls(container = profilesContainer) {
   scheduleSidebarErrors();
 }
 
-function updateTaskProfileOptionsForContainer(container, profiles) {
+function updateTaskProfileOptionsForContainer(container, profiles, allProfilesById) {
   if (!container) return;
   const selects = container.querySelectorAll(".task-profile-select");
   selects.forEach((select) => {
-    populateSelect(select, profiles, "No profiles configured");
+    populateSelectPreserving(
+      select,
+      profiles,
+      "No profiles configured",
+      allProfilesById
+    );
   });
 }
 
 function updateTaskProfileOptions() {
-  const profiles = collectProfiles().filter((profile) => isEnabled(profile.enabled));
-  updateTaskProfileOptionsForContainer(tasksContainer, profiles);
+  const allGlobalProfiles = collectProfiles();
+  const enabledProfiles = allGlobalProfiles.filter((profile) =>
+    isEnabled(profile.enabled)
+  );
+  updateTaskProfileOptionsForContainer(
+    tasksContainer,
+    enabledProfiles,
+    buildItemMap(allGlobalProfiles)
+  );
 
   const workspaceCards = document.querySelectorAll(".workspace-card");
   workspaceCards.forEach((card) => {
     const scope = getWorkspaceScopeData(card);
+    const workspaceProfiles = collectProfiles(
+      card.querySelector(".workspace-profiles")
+    );
+    const allProfiles = mergeById(allGlobalProfiles, workspaceProfiles);
     updateTaskProfileOptionsForContainer(
       card.querySelector(".workspace-tasks"),
-      scope.profiles
+      scope.profiles,
+      buildItemMap(allProfiles)
     );
   });
 
   const siteCards = document.querySelectorAll(".site-card");
   siteCards.forEach((card) => {
     const scope = getSiteScopeData(card);
+    const workspaceId = card.querySelector(".site-workspace")?.value || "global";
+    const workspaceCard = document.querySelector(
+      `.workspace-card[data-id="${workspaceId}"]`
+    );
+    const workspaceProfiles = workspaceCard
+      ? collectProfiles(workspaceCard.querySelector(".workspace-profiles"))
+      : [];
+    const siteProfiles = collectProfiles(card.querySelector(".site-profiles"));
+    const allProfiles = mergeById(
+      allGlobalProfiles,
+      workspaceProfiles,
+      siteProfiles
+    );
     updateTaskProfileOptionsForContainer(
       card.querySelector(".site-tasks"),
-      scope.profiles
+      scope.profiles,
+      buildItemMap(allProfiles)
     );
   });
 
@@ -1452,7 +1976,7 @@ function refreshSiteApiConfigLists() {
     const list = card.querySelector('.inherited-list[data-module="apiConfigs"]');
     if (!list) return;
     const disabled = collectDisabledInherited(list);
-    const scopedConfigs = getSiteApiConfigs(card);
+    const scopedConfigs = getWorkspaceAvailableApiConfigsForSite(card);
     const nextList = buildApiConfigToggleList(scopedConfigs, disabled);
     nextList.dataset.module = "apiConfigs";
     list.replaceWith(nextList);
@@ -1497,6 +2021,7 @@ function refreshWorkspaceInheritedLists() {
       );
     });
   });
+  refreshInheritedSourceLabels();
 }
 
 function refreshSiteInheritedLists() {
@@ -1544,6 +2069,7 @@ function refreshSiteInheritedLists() {
       replaceInheritedList(list, section.key, section.parent, section.container);
     });
   });
+  refreshInheritedSourceLabels();
 }
 
 function getWorkspaceApiConfigs(workspaceCard) {
@@ -1574,6 +2100,20 @@ function getSiteApiConfigs(siteCard) {
       !workspaceDisabled.includes(config.id) &&
       !siteDisabled.includes(config.id)
   );
+}
+
+function getWorkspaceAvailableApiConfigsForSite(siteCard) {
+  const apiConfigs = collectApiConfigs().filter((config) => isEnabled(config.enabled));
+  if (!siteCard) return apiConfigs;
+  const workspaceId =
+    siteCard.querySelector(".site-workspace")?.value || "global";
+  const workspaceCard = document.querySelector(
+    `.workspace-card[data-id="${workspaceId}"]`
+  );
+  const workspaceDisabled = collectDisabledInherited(
+    workspaceCard?.querySelector('.inherited-list[data-module="apiConfigs"]')
+  );
+  return apiConfigs.filter((config) => !workspaceDisabled.includes(config.id));
 }
 
 function getApiConfigsForEnvContainer(container) {
@@ -1667,6 +2207,7 @@ function updateShortcutOptionsForContainer(container, options = {}) {
       populateSelect(taskSelect, tasks, "No tasks configured");
     }
   });
+  updateShortcutControls(container);
 }
 
 function updateShortcutOptions() {
@@ -1792,7 +2333,22 @@ function renderWorkspaceSection(title, containerClass, items, builder, newItemFa
   const summary = document.createElement("summary");
   summary.className = "panel-summary";
   summary.style.cursor = "pointer";
-  summary.innerHTML = `<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">${title}</h3>`;
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "panel-summary-row";
+  const summaryLeft = document.createElement("div");
+  summaryLeft.className = "panel-summary-left";
+  const summaryRight = document.createElement("div");
+  summaryRight.className = "panel-summary-right";
+  const summaryTitle = document.createElement("h3");
+  summaryTitle.textContent = title;
+  summaryTitle.style.display = "inline";
+  summaryTitle.style.fontSize = "13px";
+  summaryTitle.style.fontWeight = "600";
+  summaryTitle.style.margin = "0";
+  summaryLeft.appendChild(summaryTitle);
+  summaryRow.appendChild(summaryLeft);
+  summaryRow.appendChild(summaryRight);
+  summary.appendChild(summaryRow);
   details.appendChild(summary);
 
   const body = document.createElement("div");
@@ -1808,37 +2364,55 @@ function renderWorkspaceSection(title, containerClass, items, builder, newItemFa
     }
   }
 
-  const row = document.createElement("div");
-  row.className = "row";
-  row.style.marginTop = "8px";
-  
   const addBtn = document.createElement("button");
-  addBtn.className = "ghost";
+  addBtn.className = "accent";
   addBtn.type = "button";
   addBtn.textContent = "Add";
   addBtn.addEventListener("click", () => {
+    openDetails(details);
     const newItem = newItemFactory(listContainer);
     const newCard = builder(newItem, listContainer);
     listContainer.appendChild(newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
     scheduleSidebarErrors();
   });
   
-  row.appendChild(addBtn);
-  body.appendChild(row);
+  summaryRight.appendChild(addBtn);
   body.appendChild(listContainer);
   details.appendChild(body);
   
   return details;
 }
 
-function buildAppearanceSection({ theme = "inherit", toolbarPosition = "inherit" } = {}) {
+function buildAppearanceSection(
+  { theme = "inherit", toolbarPosition = "inherit" } = {},
+  { stateKey } = {}
+) {
   const details = document.createElement("details");
   details.className = "panel sub-panel";
+  if (stateKey) {
+    details.dataset.stateKey = stateKey;
+  }
 
   const summary = document.createElement("summary");
   summary.className = "panel-summary";
-  summary.innerHTML =
-    '<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">Appearance</h3>';
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "panel-summary-row";
+  const summaryLeft = document.createElement("div");
+  summaryLeft.className = "panel-summary-left";
+  const summaryRight = document.createElement("div");
+  summaryRight.className = "panel-summary-right";
+  const summaryTitle = document.createElement("h3");
+  summaryTitle.textContent = "Appearance";
+  summaryTitle.style.display = "inline";
+  summaryTitle.style.fontSize = "13px";
+  summaryTitle.style.fontWeight = "600";
+  summaryTitle.style.margin = "0";
+  summaryLeft.appendChild(summaryTitle);
+  summaryRow.appendChild(summaryLeft);
+  summaryRow.appendChild(summaryRight);
+  summary.appendChild(summaryRow);
   details.appendChild(summary);
 
   const body = document.createElement("div");
@@ -1893,15 +2467,77 @@ function buildAppearanceSection({ theme = "inherit", toolbarPosition = "inherit"
   toolbarField.appendChild(toolbarLabel);
   toolbarField.appendChild(toolbarSelect);
 
-  body.appendChild(themeField);
-  body.appendChild(toolbarField);
+  const appearanceRow = document.createElement("div");
+  appearanceRow.className = "inline-fields two appearance-fields";
+  appearanceRow.appendChild(themeField);
+  appearanceRow.appendChild(toolbarField);
+  body.appendChild(appearanceRow);
   details.appendChild(body);
+  registerDetail(details, details.open);
 
   return details;
 }
 
 function normalizeName(value) {
   return (value || "").trim().toLowerCase();
+}
+
+function buildRenameMap(previousItems, nextItems) {
+  const previous = Array.isArray(previousItems) ? previousItems : [];
+  const next = Array.isArray(nextItems) ? nextItems : [];
+  const previousById = new Map();
+  for (const item of previous) {
+    const id = item?.id;
+    const name = normalizeName(item?.name);
+    if (id && name) previousById.set(id, name);
+  }
+  const map = new Map();
+  for (const item of next) {
+    const id = item?.id;
+    if (!id || !previousById.has(id)) continue;
+    const previousName = previousById.get(id);
+    const nextName = normalizeName(item?.name);
+    if (!previousName || !nextName || previousName === nextName) continue;
+    map.set(previousName, nextName);
+  }
+  return map;
+}
+
+function applyRenameMap(list, map) {
+  if (!Array.isArray(list) || !map || map.size === 0) {
+    return Array.isArray(list) ? [...list] : [];
+  }
+  const output = [];
+  const seen = new Set();
+  for (const raw of list) {
+    const normalized = normalizeName(raw);
+    if (!normalized) continue;
+    const next = map.get(normalized) || normalized;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    output.push(next);
+  }
+  return output;
+}
+
+function applyRenameMaps(list, maps) {
+  let output = Array.isArray(list) ? [...list] : [];
+  for (const map of maps) {
+    if (map && map.size) {
+      output = applyRenameMap(output, map);
+    }
+  }
+  return output;
+}
+
+function filterDisabledIds(list, items) {
+  if (!Array.isArray(list)) return [];
+  const allowed = new Set(
+    (Array.isArray(items) ? items : [])
+      .map((item) => item?.id)
+      .filter(Boolean)
+  );
+  return list.filter((id) => allowed.has(id));
 }
 
 function resolveScopedItems(parentItems, localItems, disabledNames) {
@@ -2031,14 +2667,213 @@ function buildApiConfigToggleList(apiConfigs, disabledIds) {
   return container;
 }
 
-function buildScopeGroup(title, content) {
+function setInheritedSource(group, source) {
+  if (!group) return;
+  const heading = group.querySelector(".scope-title");
+  if (!heading) return;
+  let meta = heading.querySelector(".scope-meta-link");
+  if (!source || !source.label) {
+    if (meta) meta.remove();
+    return;
+  }
+  if (!meta) {
+    meta = document.createElement("button");
+    meta.type = "button";
+    meta.className = "scope-meta-link hint-accent";
+    heading.appendChild(meta);
+  }
+  meta.textContent = source.label;
+  meta.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof source.onClick === "function") {
+      source.onClick();
+    }
+  };
+}
+
+function refreshInheritedSourceLabels() {
+  const groups = document.querySelectorAll(".scope-group-inherited");
+  groups.forEach((group) => {
+    const resolver = group._resolveInheritedSource;
+    if (!resolver) return;
+    const source = typeof resolver === "function" ? resolver() : resolver;
+    setInheritedSource(group, source);
+  });
+}
+
+function getTocLevel(link) {
+  if (link.closest(".toc-cards")) return 2;
+  if (link.closest(".toc-sub")) return 1;
+  return 0;
+}
+
+function isElementVisibleForHighlight(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") {
+    return false;
+  }
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  let node = element;
+  while (node) {
+    if (node.tagName === "DETAILS" && !node.open) {
+      const summary = node.querySelector(":scope > summary");
+      if (!summary || !summary.contains(element)) {
+        return false;
+      }
+    }
+    node = node.parentElement;
+  }
+  const style = window.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") {
+    return false;
+  }
+  const rect = element.getBoundingClientRect();
+  if (rect.height <= 0 || rect.width <= 0) return false;
+  if (rect.bottom <= 0 || rect.top >= viewportHeight) return false;
+  if (rect.right <= 0 || rect.left >= viewportWidth) return false;
+  return true;
+}
+
+function resolveTocTarget(link) {
+  const selector = link.dataset.tocTargetSelector;
+  if (selector) {
+    const target = document.querySelector(selector);
+    if (target) return target;
+  }
+  const href = link.getAttribute("href");
+  if (href && href.startsWith("#") && href.length > 1) {
+    const target = document.querySelector(href);
+    if (target) return target;
+  }
+  return null;
+}
+
+function resolveTocHeader(target) {
+  if (!target) return null;
+  const summary = target.querySelector(":scope > summary.panel-summary");
+  if (summary) return summary;
+  const heading = target.querySelector(".panel-summary h3, .panel-summary h2");
+  if (heading) return heading.closest(".panel-summary") || heading;
+  return target;
+}
+
+function findVisibleTocLinkInAncestors(target) {
+  if (!target) return null;
+  let node = target;
+  let depth = 0;
+  while (node && depth < 3) {
+    const link = tocTargetMap.get(node);
+    if (link && isElementVisibleForHighlight(link)) {
+      return link;
+    }
+    node = node.parentElement?.closest("details") || null;
+    depth += 1;
+  }
+  return null;
+}
+
+function setActiveTocLink(link) {
+  if (activeTocLink === link) return;
+  if (activeTocLink) activeTocLink.classList.remove("toc-active");
+  activeTocLink = link || null;
+  if (activeTocLink) activeTocLink.classList.add("toc-active");
+}
+
+function updateTocHighlight() {
+  if (!tocTargets.length) {
+    setActiveTocLink(null);
+    return;
+  }
+  const visible = [];
+  tocTargets.forEach((entry) => {
+    const { link, header, level, order } = entry;
+    if (!header || !header.isConnected) return;
+    if (!isElementVisibleForHighlight(link)) return;
+    if (!isElementVisibleForHighlight(header)) return;
+    const rect = header.getBoundingClientRect();
+    visible.push({ link, level, order, top: rect.top, entry });
+  });
+  if (!visible.length) {
+    const bodyCandidates = [];
+    tocTargets.forEach((entry) => {
+      const { link, header, level, order } = entry;
+      if (!header || !header.isConnected) return;
+      if (!isElementVisibleForHighlight(header)) return;
+      const rect = header.getBoundingClientRect();
+      bodyCandidates.push({ link, level, order, top: rect.top, entry });
+    });
+    if (!bodyCandidates.length) {
+      setActiveTocLink(null);
+      return;
+    }
+    const maxLevel = Math.max(...bodyCandidates.map((item) => item.level));
+    const sameLevel = bodyCandidates.filter((item) => item.level === maxLevel);
+    sameLevel.sort((a, b) => {
+      if (a.top !== b.top) return a.top - b.top;
+      return a.order - b.order;
+    });
+    const candidate = sameLevel[0]?.entry;
+    if (!candidate) {
+      setActiveTocLink(null);
+      return;
+    }
+    const fallback = findVisibleTocLinkInAncestors(candidate.target);
+    setActiveTocLink(fallback);
+    return;
+  }
+  const maxLevel = Math.max(...visible.map((item) => item.level));
+  const sameLevel = visible.filter((item) => item.level === maxLevel);
+  sameLevel.sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    return a.order - b.order;
+  });
+  setActiveTocLink(sameLevel[0]?.link || null);
+}
+
+function scheduleTocHighlight() {
+  if (tocHighlightFrame) return;
+  tocHighlightFrame = requestAnimationFrame(() => {
+    tocHighlightFrame = null;
+    updateTocHighlight();
+  });
+}
+
+function refreshTocTargets() {
+  tocTargets = [];
+  tocTargetMap = new WeakMap();
+  const links = document.querySelectorAll(".toc-links a");
+  links.forEach((link, order) => {
+    const target = resolveTocTarget(link);
+    if (!target) return;
+    const header = resolveTocHeader(target);
+    if (!header) return;
+    tocTargetMap.set(target, link);
+    tocTargets.push({
+      link,
+      target,
+      header,
+      level: getTocLevel(link),
+      order
+    });
+  });
+  scheduleTocHighlight();
+}
+
+function buildScopeGroup(title, content, meta) {
   const wrapper = document.createElement("div");
   wrapper.className = "scope-group";
   const heading = document.createElement("div");
   heading.className = "scope-title hint-accent";
-  heading.textContent = title;
+  const titleSpan = document.createElement("span");
+  titleSpan.className = "scope-title-text";
+  titleSpan.textContent = title;
+  heading.appendChild(titleSpan);
   wrapper.appendChild(heading);
   wrapper.appendChild(content);
+  if (meta) {
+    setInheritedSource(wrapper, meta);
+  }
   return wrapper;
 }
 
@@ -2089,13 +2924,33 @@ function buildScopedModuleSection({
   localContainerClass,
   buildCard,
   newItemFactory,
-  cardOptions
+  cardOptions,
+  stateKey,
+  inheritedFrom
 }) {
   const details = document.createElement("details");
   details.className = "panel sub-panel";
+  if (stateKey) {
+    details.dataset.stateKey = stateKey;
+  }
   const summary = document.createElement("summary");
   summary.className = "panel-summary";
-  summary.innerHTML = `<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">${title}</h3>`;
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "panel-summary-row";
+  const summaryLeft = document.createElement("div");
+  summaryLeft.className = "panel-summary-left";
+  const summaryRight = document.createElement("div");
+  summaryRight.className = "panel-summary-right";
+  const summaryTitle = document.createElement("h3");
+  summaryTitle.textContent = title;
+  summaryTitle.style.display = "inline";
+  summaryTitle.style.fontSize = "13px";
+  summaryTitle.style.fontWeight = "600";
+  summaryTitle.style.margin = "0";
+  summaryLeft.appendChild(summaryTitle);
+  summaryRow.appendChild(summaryLeft);
+  summaryRow.appendChild(summaryRight);
+  summary.appendChild(summaryRow);
   details.appendChild(summary);
 
   const body = document.createElement("div");
@@ -2120,8 +2975,17 @@ function buildScopedModuleSection({
     );
   };
 
-  const inheritedGroup = buildScopeGroup("Inherited", inheritedList);
+  const inheritedSource =
+    typeof inheritedFrom === "function" ? inheritedFrom() : inheritedFrom;
+  const inheritedGroup = buildScopeGroup(
+    "Inherited",
+    inheritedList,
+    inheritedSource
+  );
   inheritedGroup.classList.add("scope-group-inherited");
+  if (inheritedFrom) {
+    inheritedGroup._resolveInheritedSource = inheritedFrom;
+  }
   body.appendChild(inheritedGroup);
 
   const localContainer = document.createElement("div");
@@ -2133,14 +2997,12 @@ function buildScopedModuleSection({
     localContainer.appendChild(buildCard(item, localContainer, options));
   }
 
-  const localActions = document.createElement("div");
-  localActions.className = "row";
-  const spacer = document.createElement("div");
   const addBtn = document.createElement("button");
   addBtn.type = "button";
-  addBtn.className = "ghost";
+  addBtn.className = "accent";
   addBtn.textContent = "Add";
   addBtn.addEventListener("click", () => {
+    openDetails(details);
     const newItem = newItemFactory(localContainer);
     const options =
       typeof cardOptions === "function" ? cardOptions() : cardOptions;
@@ -2151,6 +3013,8 @@ function buildScopedModuleSection({
     } else {
       localContainer.appendChild(newCard);
     }
+    openDetails(newCard);
+    centerCardInView(newCard);
     if (module === "envs") {
       updateEnvApiOptions();
     } else if (module === "profiles") {
@@ -2161,11 +3025,9 @@ function buildScopedModuleSection({
     refreshInherited();
     scheduleSidebarErrors();
   });
-  localActions.appendChild(spacer);
-  localActions.appendChild(addBtn);
+  summaryRight.appendChild(addBtn);
 
   const localWrapper = document.createElement("div");
-  localWrapper.appendChild(localActions);
   localWrapper.appendChild(localContainer);
   body.appendChild(buildScopeGroup(localLabel, localWrapper));
 
@@ -2191,6 +3053,7 @@ function buildScopedModuleSection({
   refreshInherited();
 
   details.appendChild(body);
+  registerDetail(details, details.open);
   return { details, localContainer };
 }
 
@@ -2416,7 +3279,407 @@ function buildDuplicateCard(module, source, container, options) {
   return null;
 }
 
-function duplicateToWorkspace(module, source, workspaceId) {
+function insertCardAtTop(container, card) {
+  if (!container || !card) return;
+  const first = container.firstElementChild;
+  if (first) {
+    container.insertBefore(card, first);
+  } else {
+    container.appendChild(card);
+  }
+}
+
+function openScopedSection(scopeCard, prefix, module) {
+  if (!scopeCard || !module) return;
+  const id = scopeCard.dataset.id;
+  if (!id) return;
+  const section = scopeCard.querySelector(
+    `details[data-state-key="${prefix}:${id}:${module}"]`
+  );
+  if (section) openDetails(section);
+}
+
+function refreshAfterModuleChange(module) {
+  if (module === "envs") {
+    updateEnvApiOptions();
+    updateTaskEnvOptions();
+  } else if (module === "profiles") {
+    updateTaskProfileOptions();
+  } else if (module === "tasks") {
+    updateShortcutOptions();
+  } else if (module === "shortcuts") {
+    updateShortcutOptions();
+  }
+  scheduleSidebarErrors();
+}
+
+const MOTION_DURATION_MS = 420;
+const MOTION_EASING = "cubic-bezier(0.2, 0, 0.2, 1)";
+let activeScrollToken = 0;
+
+function cubicBezierAtTime(t, p1x, p1y, p2x, p2y) {
+  if (p1x === p1y && p2x === p2y) return t;
+  const cx = 3 * p1x;
+  const bx = 3 * (p2x - p1x) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 3 * p1y;
+  const by = 3 * (p2y - p1y) - cy;
+  const ay = 1 - cy - by;
+  const sampleX = (tVal) => ((ax * tVal + bx) * tVal + cx) * tVal;
+  const sampleY = (tVal) => ((ay * tVal + by) * tVal + cy) * tVal;
+  let start = 0;
+  let end = 1;
+  let current = t;
+  for (let i = 0; i < 20; i += 1) {
+    const x = sampleX(current);
+    const delta = x - t;
+    if (Math.abs(delta) < 1e-4) break;
+    if (delta > 0) {
+      end = current;
+      current = (start + current) / 2;
+    } else {
+      start = current;
+      current = (current + end) / 2;
+    }
+  }
+  return sampleY(current);
+}
+
+function motionEase(t) {
+  return cubicBezierAtTime(t, 0.2, 0, 0.2, 1);
+}
+
+function animateScrollTo(target) {
+  const start = window.scrollY || 0;
+  const delta = target - start;
+  if (!delta) return;
+  const prefersReduced =
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (prefersReduced) {
+    window.scrollTo(0, target);
+    return;
+  }
+  const token = (activeScrollToken += 1);
+  const startTime = performance.now();
+  const step = (now) => {
+    if (token !== activeScrollToken) return;
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / MOTION_DURATION_MS, 1);
+    const eased = motionEase(progress);
+    window.scrollTo(0, start + delta * eased);
+    if (progress < 1) {
+      requestAnimationFrame(step);
+    }
+  };
+  requestAnimationFrame(step);
+}
+
+function scrollCardToCenter(card) {
+  if (!card || typeof card.getBoundingClientRect !== "function") return;
+  const rect = card.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const target =
+    rect.top + window.scrollY - (viewportHeight / 2 - rect.height / 2);
+  animateScrollTo(Math.max(0, target));
+}
+
+function updateModuleControls(module, container) {
+  if (!container) return;
+  if (module === "envs") updateEnvControls(container);
+  else if (module === "profiles") updateProfileControls(container);
+  else if (module === "tasks") updateTaskControls(container);
+  else if (module === "shortcuts") updateShortcutControls(container);
+}
+
+function isElementInViewport(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") return false;
+  const rect = element.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  return (
+    rect.bottom > 0 &&
+    rect.top < viewportHeight &&
+    rect.right > 0 &&
+    rect.left < viewportWidth
+  );
+}
+
+function runWhenVisible(element, callback, options = {}) {
+  if (!element || typeof callback !== "function") return;
+  const { scrollToCenter = false } = options;
+  if (isElementInViewport(element)) {
+    callback();
+    return;
+  }
+  if (scrollToCenter) {
+    scrollCardToCenter(element);
+    requestAnimationFrame(() => {
+      if (!element.isConnected) return;
+      callback();
+    });
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        observer.disconnect();
+        callback();
+        break;
+      }
+    }
+  }, { threshold: 0.1 });
+  observer.observe(element);
+}
+
+function applyFlipAnimation(card, deltaX, deltaY) {
+  if (!card) return;
+  if (!deltaX && !deltaY) return;
+  card.style.transition = "none";
+  card.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+  card.style.willChange = "transform";
+  card.getBoundingClientRect();
+  requestAnimationFrame(() => {
+    card.style.transition = `transform ${MOTION_DURATION_MS}ms ${MOTION_EASING}`;
+    card.style.transform = "translate(0, 0)";
+    const cleanup = () => {
+      card.style.transition = "";
+      card.style.transform = "";
+      card.style.willChange = "";
+      card.removeEventListener("transitionend", cleanup);
+    };
+    card.addEventListener("transitionend", cleanup);
+  });
+}
+
+function animateDuplicateFromRect(card, sourceRect) {
+  if (!card || !sourceRect) return;
+  const prefersReduced =
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (prefersReduced) return;
+  const sourceScrollX = window.scrollX || 0;
+  const sourceScrollY = window.scrollY || 0;
+  const sourcePage = {
+    left: sourceRect.left + sourceScrollX,
+    top: sourceRect.top + sourceScrollY
+  };
+  requestAnimationFrame(() => {
+    runWhenVisible(
+      card,
+      () => {
+        if (!card.isConnected) return;
+        const destRect = card.getBoundingClientRect();
+        const currentScrollX = window.scrollX || 0;
+        const currentScrollY = window.scrollY || 0;
+        const sourceViewport = {
+          left: sourcePage.left - currentScrollX,
+          top: sourcePage.top - currentScrollY
+        };
+        const deltaX = sourceViewport.left - destRect.left;
+        const deltaY = sourceViewport.top - destRect.top;
+        applyFlipAnimation(card, deltaX, deltaY);
+      },
+      { scrollToCenter: true }
+    );
+  });
+}
+
+function animateCardMove(card, applyMove, options = {}) {
+  if (!card || typeof applyMove !== "function") return;
+  const firstRect = card.getBoundingClientRect();
+  applyMove();
+  const lastRect = card.getBoundingClientRect();
+  const deltaX = firstRect.left - lastRect.left;
+  const deltaY = firstRect.top - lastRect.top;
+  const prefersReduced =
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (prefersReduced || (!deltaX && !deltaY)) {
+    return;
+  }
+  runWhenVisible(card, () => applyFlipAnimation(card, deltaX, deltaY), {
+    scrollToCenter: Boolean(options.scrollToCenter)
+  });
+}
+
+function moveCardToContainer(card, container) {
+  if (!card || !container) return;
+  animateCardMove(card, () => insertCardAtTop(container, card), {
+    scrollToCenter: true
+  });
+}
+
+function moveCardToWorkspace(module, card, workspaceId) {
+  const workspaceCard = document.querySelector(
+    `.workspace-card[data-id="${workspaceId}"]`
+  );
+  if (!workspaceCard) return;
+  const container = workspaceCard.querySelector(`.workspace-${module}`);
+  if (!container) return;
+  const origin = card.parentElement;
+  moveCardToContainer(card, container);
+  if (origin && origin !== container) {
+    updateModuleControls(module, origin);
+  }
+  updateModuleControls(module, container);
+  openDetailsChain(workspaceCard);
+  openScopedSection(workspaceCard, "workspace", module);
+  openDetails(card);
+  refreshAfterModuleChange(module);
+}
+
+function moveCardToSite(module, card, siteId) {
+  const siteCard = document.querySelector(`.site-card[data-id="${siteId}"]`);
+  if (!siteCard) return;
+  const container = siteCard.querySelector(`.site-${module}`);
+  if (!container) return;
+  const origin = card.parentElement;
+  moveCardToContainer(card, container);
+  if (origin && origin !== container) {
+    updateModuleControls(module, origin);
+  }
+  updateModuleControls(module, container);
+  openDetailsChain(siteCard);
+  openScopedSection(siteCard, "site", module);
+  openDetails(card);
+  refreshAfterModuleChange(module);
+}
+
+function getGlobalContainerForModule(module) {
+  if (module === "envs") return envConfigsContainer;
+  if (module === "profiles") return profilesContainer;
+  if (module === "tasks") return tasksContainer;
+  if (module === "shortcuts") return shortcutsContainer;
+  return null;
+}
+
+function getGlobalScopeForModule(module) {
+  if (module === "tasks") {
+    return {
+      envs: collectEnvConfigs().filter((env) => isEnabled(env.enabled)),
+      profiles: collectProfiles().filter((profile) => isEnabled(profile.enabled))
+    };
+  }
+  if (module === "shortcuts") {
+    return {
+      envs: collectEnvConfigs().filter((env) => isEnabled(env.enabled)),
+      profiles: collectProfiles().filter((profile) => isEnabled(profile.enabled)),
+      tasks: collectTasks().filter((task) => isEnabled(task.enabled))
+    };
+  }
+  return null;
+}
+
+function openGlobalSectionForModule(module) {
+  const globalPanel = document.getElementById("global-config-panel");
+  const sectionId = {
+    envs: "environment-panel",
+    profiles: "profiles-panel",
+    tasks: "tasks-panel",
+    shortcuts: "shortcuts-panel"
+  }[module];
+  if (sectionId) {
+    const section = document.getElementById(sectionId);
+    if (section) {
+      openDetailsChain(section);
+      openDetails(section);
+      return;
+    }
+  }
+  if (globalPanel) {
+    openDetailsChain(globalPanel);
+    openDetails(globalPanel);
+  }
+}
+
+function focusGlobalModule(module) {
+  const sectionId = {
+    envs: "environment-panel",
+    profiles: "profiles-panel",
+    tasks: "tasks-panel",
+    shortcuts: "shortcuts-panel"
+  }[module];
+  if (sectionId) {
+    const section = document.getElementById(sectionId);
+    if (section) {
+      openDetailsChain(section);
+      openDetails(section);
+      centerCardInView(section);
+      return;
+    }
+  }
+  const globalPanel = document.getElementById("global-config-panel");
+  if (globalPanel) {
+    openDetailsChain(globalPanel);
+    openDetails(globalPanel);
+    centerCardInView(globalPanel);
+  }
+}
+
+function focusGlobalApiConfigSection() {
+  const section = document.getElementById("api-panel");
+  if (section) {
+    openDetailsChain(section);
+    openDetails(section);
+    centerCardInView(section);
+    return;
+  }
+  const globalPanel = document.getElementById("global-config-panel");
+  if (globalPanel) {
+    openDetailsChain(globalPanel);
+    openDetails(globalPanel);
+    centerCardInView(globalPanel);
+  }
+}
+
+function focusWorkspaceModule(workspaceId, module) {
+  if (!workspaceId || workspaceId === "global") {
+    focusGlobalModule(module);
+    return;
+  }
+  const workspaceCard = document.querySelector(
+    `.workspace-card[data-id="${workspaceId}"]`
+  );
+  if (!workspaceCard) return;
+  openDetailsChain(workspaceCard);
+  openScopedSection(workspaceCard, "workspace", module);
+  const section = workspaceCard.querySelector(
+    `details[data-state-key="workspace:${workspaceId}:${module}"]`
+  );
+  if (section) {
+    openDetails(section);
+    centerCardInView(section);
+    return;
+  }
+  centerCardInView(workspaceCard);
+}
+
+function getWorkspaceNameById(workspaceId) {
+  if (!workspaceId || workspaceId === "global") return "Global";
+  const workspaceCard = document.querySelector(
+    `.workspace-card[data-id="${workspaceId}"]`
+  );
+  const name =
+    workspaceCard?.querySelector(".workspace-name")?.value?.trim() || "";
+  return name || "Untitled Workspace";
+}
+
+function moveCardToGlobal(module, card) {
+  const container = getGlobalContainerForModule(module);
+  if (!container) return;
+  const origin = card.parentElement;
+  moveCardToContainer(card, container);
+  if (origin && origin !== container) {
+    updateModuleControls(module, origin);
+  }
+  updateModuleControls(module, container);
+  openGlobalSectionForModule(module);
+  openDetails(card);
+  refreshAfterModuleChange(module);
+}
+
+function duplicateToWorkspace(module, source, workspaceId, sourceRect) {
   const workspaceCard = document.querySelector(
     `.workspace-card[data-id="${workspaceId}"]`
   );
@@ -2426,12 +3689,18 @@ function duplicateToWorkspace(module, source, workspaceId) {
   const scope = getWorkspaceScopeData(workspaceCard);
   const card = buildDuplicateCard(module, source, container, scope);
   if (card) {
-    container.appendChild(card);
-    scheduleSidebarErrors();
+    insertCardAtTop(container, card);
+    openDetailsChain(workspaceCard);
+    openScopedSection(workspaceCard, "workspace", module);
+    openDetails(card);
+    animateDuplicateFromRect(card, sourceRect);
+    updateModuleControls(module, container);
+    refreshAfterModuleChange(module);
+    centerCardInViewAfterLayout(card);
   }
 }
 
-function duplicateToSite(module, source, siteId) {
+function duplicateToSite(module, source, siteId, sourceRect) {
   const siteCard = document.querySelector(`.site-card[data-id="${siteId}"]`);
   if (!siteCard) return;
   const container = siteCard.querySelector(`.site-${module}`);
@@ -2439,72 +3708,243 @@ function duplicateToSite(module, source, siteId) {
   const scope = getSiteScopeData(siteCard);
   const card = buildDuplicateCard(module, source, container, scope);
   if (card) {
-    container.appendChild(card);
-    scheduleSidebarErrors();
+    insertCardAtTop(container, card);
+    openDetailsChain(siteCard);
+    openScopedSection(siteCard, "site", module);
+    openDetails(card);
+    animateDuplicateFromRect(card, sourceRect);
+    updateModuleControls(module, container);
+    refreshAfterModuleChange(module);
+    centerCardInViewAfterLayout(card);
   }
 }
 
-function buildDuplicateControls(module, getSourceData) {
+function duplicateToGlobal(module, source, sourceRect) {
+  const container = getGlobalContainerForModule(module);
+  if (!container) return;
+  const scope = getGlobalScopeForModule(module);
+  const card = buildDuplicateCard(module, source, container, scope);
+  if (card) {
+    insertCardAtTop(container, card);
+    openGlobalSectionForModule(module);
+    openDetails(card);
+    animateDuplicateFromRect(card, sourceRect);
+    updateModuleControls(module, container);
+    refreshAfterModuleChange(module);
+    centerCardInViewAfterLayout(card);
+  }
+}
+
+function buildScopedActionControls(label, handlers = {}) {
   const wrapper = document.createElement("div");
   wrapper.className = "dup-controls";
+  const { onHere, onGlobal, onWorkspace, onSite } = handlers;
 
-  const workspaceBtn = document.createElement("button");
-  workspaceBtn.type = "button";
-  workspaceBtn.className = "ghost";
-  workspaceBtn.textContent = "Duplicate to Workspace";
-  const workspaceSelect = document.createElement("select");
-  workspaceSelect.className = "dup-select hidden";
+  const select = document.createElement("select");
+  select.className = "dup-select";
+  select.addEventListener("click", (event) => event.stopPropagation());
+  select.addEventListener("mousedown", (event) => event.stopPropagation());
 
-  workspaceBtn.addEventListener("click", () => {
-    const targets = listWorkspaceTargets();
-    fillTargetSelect(workspaceSelect, targets, "Select workspace");
-    workspaceSelect.classList.toggle("hidden");
-    workspaceSelect.focus();
+  const placeholderValue = "__placeholder__";
+  let menuMode = "root";
+  let outsideHandler = null;
+
+  const setOptions = (options, placeholderLabel) => {
+    select.innerHTML = "";
+    if (placeholderLabel) {
+      const placeholder = document.createElement("option");
+      placeholder.value = placeholderValue;
+      placeholder.textContent = placeholderLabel;
+      select.appendChild(placeholder);
+    }
+    for (const option of options) {
+      const entry = document.createElement("option");
+      entry.value = option.value;
+      entry.textContent = option.label;
+      if (option.disabled) entry.disabled = true;
+      if (option.kind === "cancel") {
+        entry.className = "dup-option-cancel";
+        entry.style.color = "#c0392b";
+        entry.style.fontWeight = "600";
+      }
+      select.appendChild(entry);
+    }
+    if (placeholderLabel) {
+      select.value = placeholderValue;
+    }
+  };
+
+  const attachOutsideHandler = () => {
+    if (outsideHandler) return;
+    outsideHandler = (event) => {
+      if (wrapper.contains(event.target)) return;
+      hideMenu();
+    };
+    document.addEventListener("mousedown", outsideHandler);
+    document.addEventListener("touchstart", outsideHandler);
+  };
+
+  const detachOutsideHandler = () => {
+    if (!outsideHandler) return;
+    document.removeEventListener("mousedown", outsideHandler);
+    document.removeEventListener("touchstart", outsideHandler);
+    outsideHandler = null;
+  };
+
+  const showMenu = (mode) => {
+    menuMode = mode;
+    if (mode === "root") {
+      setOptions([
+        { value: "here", label: "Here" },
+        { value: "global", label: "Global" },
+        { value: "workspace", label: "Workspace" },
+        { value: "site", label: "Site" },
+        { value: "cancel", label: "Cancel", kind: "cancel" }
+      ], label);
+      detachOutsideHandler();
+    } else if (mode === "workspace") {
+      const targets = listWorkspaceTargets();
+      const options = [
+        { value: "back", label: "Back" },
+        { value: "cancel", label: "Cancel", kind: "cancel" }
+      ];
+      if (!targets.length) {
+        options.push({ value: "", label: "No workspaces", disabled: true });
+      } else {
+        targets.forEach((target) => {
+          options.push({ value: target.id, label: target.name });
+        });
+      }
+      setOptions(options, "Select Destination");
+      attachOutsideHandler();
+    } else if (mode === "site") {
+      const targets = listSiteTargets();
+      const options = [
+        { value: "back", label: "Back" },
+        { value: "cancel", label: "Cancel", kind: "cancel" }
+      ];
+      if (!targets.length) {
+        options.push({ value: "", label: "No sites", disabled: true });
+      } else {
+        targets.forEach((target) => {
+          options.push({ value: target.id, label: target.name });
+        });
+      }
+      setOptions(options, "Select Destination");
+      attachOutsideHandler();
+    }
+  };
+
+  const resetMenu = () => {
+    menuMode = "root";
+    showMenu("root");
+  };
+
+  showMenu("root");
+
+  select.addEventListener("change", () => {
+    const value = select.value;
+    if (!value || value === placeholderValue) return;
+    if (menuMode === "root") {
+      if (value === "cancel") {
+        resetMenu();
+        return;
+      }
+      if (value === "here") {
+        if (typeof onHere === "function") {
+          onHere();
+        }
+        resetMenu();
+        return;
+      }
+      if (value === "global") {
+        if (typeof onGlobal === "function") {
+          onGlobal();
+        }
+        resetMenu();
+        return;
+      }
+      if (value === "workspace" || value === "site") {
+        showMenu(value);
+      }
+      return;
+    }
+    if (menuMode === "workspace") {
+      if (value === "cancel") {
+        resetMenu();
+        return;
+      }
+      if (value === "back") {
+        showMenu("root");
+        return;
+      }
+      if (typeof onWorkspace === "function") {
+        onWorkspace(value);
+      }
+      resetMenu();
+      return;
+    }
+    if (menuMode === "site") {
+      if (value === "cancel") {
+        resetMenu();
+        return;
+      }
+      if (value === "back") {
+        showMenu("root");
+        return;
+      }
+      if (typeof onSite === "function") {
+        onSite(value);
+      }
+      resetMenu();
+    }
   });
 
-  workspaceSelect.addEventListener("change", () => {
-    if (!workspaceSelect.value) return;
-    duplicateToWorkspace(module, getSourceData(), workspaceSelect.value);
-    workspaceSelect.value = "";
-    workspaceSelect.classList.add("hidden");
+  select.addEventListener("blur", () => {
+    resetMenu();
   });
 
-  const siteBtn = document.createElement("button");
-  siteBtn.type = "button";
-  siteBtn.className = "ghost";
-  siteBtn.textContent = "Duplicate to Site";
-  const siteSelect = document.createElement("select");
-  siteSelect.className = "dup-select hidden";
-
-  siteBtn.addEventListener("click", () => {
-    const targets = listSiteTargets();
-    fillTargetSelect(siteSelect, targets, "Select site");
-    siteSelect.classList.toggle("hidden");
-    siteSelect.focus();
-  });
-
-  siteSelect.addEventListener("change", () => {
-    if (!siteSelect.value) return;
-    duplicateToSite(module, getSourceData(), siteSelect.value);
-    siteSelect.value = "";
-    siteSelect.classList.add("hidden");
-  });
-
-  wrapper.appendChild(workspaceBtn);
-  wrapper.appendChild(workspaceSelect);
-  wrapper.appendChild(siteBtn);
-  wrapper.appendChild(siteSelect);
+  wrapper.appendChild(select);
   return wrapper;
 }
 
-function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
-  const card = document.createElement("div");
-  card.className = "workspace-card panel";
-  card.dataset.id = ws.id || newWorkspaceId();
+function buildDuplicateControls(module, getSourceData, options = {}) {
+  const { onHere, sourceCard } = options;
+  const getSourceRect = () =>
+    sourceCard && typeof sourceCard.getBoundingClientRect === "function"
+      ? sourceCard.getBoundingClientRect()
+      : null;
+  return buildScopedActionControls("Duplicate", {
+    onHere,
+    onGlobal: () => duplicateToGlobal(module, getSourceData(), getSourceRect()),
+    onWorkspace: (workspaceId) =>
+      duplicateToWorkspace(module, getSourceData(), workspaceId, getSourceRect()),
+    onSite: (siteId) =>
+      duplicateToSite(module, getSourceData(), siteId, getSourceRect())
+  });
+}
 
-  const header = document.createElement("div");
-  header.className = "row workspace-header";
-  header.style.alignItems = "flex-end";
+function buildMoveControls(module, card, container) {
+  return buildScopedActionControls("Move", {
+    onHere: () => {
+      const origin = card.parentElement;
+      moveCardToContainer(card, container);
+      if (origin) updateModuleControls(module, origin);
+      updateModuleControls(module, container);
+      openDetails(card);
+      refreshAfterModuleChange(module);
+    },
+    onGlobal: () => moveCardToGlobal(module, card),
+    onWorkspace: (workspaceId) => moveCardToWorkspace(module, card, workspaceId),
+    onSite: (siteId) => moveCardToSite(module, card, siteId)
+  });
+}
+
+function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
+  const card = document.createElement("details");
+  card.className = "workspace-card";
+  card.dataset.id = ws.id || newWorkspaceId();
+  card.dataset.stateKey = `workspace:${card.dataset.id}`;
 
   const nameField = document.createElement("div");
   nameField.className = "field";
@@ -2523,6 +3963,18 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
 
+  const { body, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled Workspace",
+    { subPanel: false }
+  );
+
+  const header = document.createElement("div");
+  header.className = "row workspace-header";
+  header.style.alignItems = "flex-end";
+  header.appendChild(nameField);
+
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "ghost delete";
@@ -2535,24 +3987,51 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     }
   });
 
-  header.appendChild(nameField);
-  header.appendChild(deleteBtn);
-  card.appendChild(header);
+  summaryRight.appendChild(deleteBtn);
+  body.appendChild(header);
 
-  const appearanceSection = buildAppearanceSection({
-    theme: ws.theme || "inherit",
-    toolbarPosition: ws.toolbarPosition || "inherit"
-  });
-  card.appendChild(appearanceSection);
+  const appearanceSection = buildAppearanceSection(
+    {
+      theme: ws.theme || "inherit",
+      toolbarPosition: ws.toolbarPosition || "inherit"
+    },
+    { stateKey: `workspace:${card.dataset.id}:appearance` }
+  );
+  body.appendChild(appearanceSection);
 
   const disabledInherited = ws.disabledInherited || {};
   const globalApiConfigs = collectApiConfigs();
   const apiConfigSection = document.createElement("details");
   apiConfigSection.className = "panel sub-panel";
+  apiConfigSection.dataset.stateKey = `workspace:${card.dataset.id}:apiConfigs`;
   const apiSummary = document.createElement("summary");
   apiSummary.className = "panel-summary";
-  apiSummary.innerHTML =
-    '<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">API Configurations</h3>';
+  const apiSummaryRow = document.createElement("div");
+  apiSummaryRow.className = "panel-summary-row";
+  const apiSummaryLeft = document.createElement("div");
+  apiSummaryLeft.className = "panel-summary-left";
+  const apiSummaryRight = document.createElement("div");
+  apiSummaryRight.className = "panel-summary-right";
+  const apiSummaryTitle = document.createElement("h3");
+  apiSummaryTitle.textContent = "API Configurations";
+  apiSummaryTitle.style.display = "inline";
+  apiSummaryTitle.style.fontSize = "13px";
+  apiSummaryTitle.style.fontWeight = "600";
+  apiSummaryTitle.style.margin = "0";
+  const apiSummaryLink = document.createElement("button");
+  apiSummaryLink.type = "button";
+  apiSummaryLink.className = "panel-meta-link hint-accent";
+  apiSummaryLink.textContent = "Global";
+  apiSummaryLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    focusGlobalApiConfigSection();
+  });
+  apiSummaryLeft.appendChild(apiSummaryTitle);
+  apiSummaryLeft.appendChild(apiSummaryLink);
+  apiSummaryRow.appendChild(apiSummaryLeft);
+  apiSummaryRow.appendChild(apiSummaryRight);
+  apiSummary.appendChild(apiSummaryRow);
   apiConfigSection.appendChild(apiSummary);
   const apiBody = document.createElement("div");
   apiBody.className = "panel-body";
@@ -2563,7 +4042,8 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
   apiList.dataset.module = "apiConfigs";
   apiBody.appendChild(apiList);
   apiConfigSection.appendChild(apiBody);
-  card.appendChild(apiConfigSection);
+  registerDetail(apiConfigSection, apiConfigSection.open);
+  body.appendChild(apiConfigSection);
 
   const envSection = buildScopedModuleSection({
     title: "Environments",
@@ -2574,15 +4054,23 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     localLabel: "Workspace-specific",
     localContainerClass: "workspace-envs",
     buildCard: buildEnvConfigCard,
+    stateKey: `workspace:${card.dataset.id}:envs`,
+    inheritedFrom: () => ({
+      label: "Global",
+      onClick: () => focusGlobalModule("envs")
+    }),
     newItemFactory: (container) => ({
       id: newEnvConfigId(),
-      name: buildUniqueDefaultName(collectNames(container, ".env-config-name")),
+      name: buildUniqueNumberedName(
+        "New Environment",
+        collectNames(container, ".env-config-name")
+      ),
       apiConfigId: getWorkspaceApiConfigs(card)[0]?.id || "",
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
       enabled: true
     })
   });
-  card.appendChild(envSection.details);
+  body.appendChild(envSection.details);
 
   const profileSection = buildScopedModuleSection({
     title: "Profiles",
@@ -2593,14 +4081,22 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     localLabel: "Workspace-specific",
     localContainerClass: "workspace-profiles",
     buildCard: buildProfileCard,
+    stateKey: `workspace:${card.dataset.id}:profiles`,
+    inheritedFrom: () => ({
+      label: "Global",
+      onClick: () => focusGlobalModule("profiles")
+    }),
     newItemFactory: (container) => ({
       id: newProfileId(),
-      name: buildUniqueDefaultName(collectNames(container, ".profile-name")),
+      name: buildUniqueNumberedName(
+        "New Profile",
+        collectNames(container, ".profile-name")
+      ),
       text: "",
       enabled: true
     })
   });
-  card.appendChild(profileSection.details);
+  body.appendChild(profileSection.details);
 
   const taskSection = buildScopedModuleSection({
     title: "Tasks",
@@ -2611,6 +4107,11 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     localLabel: "Workspace-specific",
     localContainerClass: "workspace-tasks",
     buildCard: buildTaskCard,
+    stateKey: `workspace:${card.dataset.id}:tasks`,
+    inheritedFrom: () => ({
+      label: "Global",
+      onClick: () => focusGlobalModule("tasks")
+    }),
     cardOptions: () => {
       const scope = getWorkspaceScopeData(card);
       return { envs: scope.envs, profiles: scope.profiles };
@@ -2619,7 +4120,10 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
       const scope = getWorkspaceScopeData(card);
       return {
         id: newTaskId(),
-        name: buildUniqueDefaultName(collectNames(container, ".task-name")),
+        name: buildUniqueNumberedName(
+          "New Task",
+          collectNames(container, ".task-name")
+        ),
         text: "",
         defaultEnvId: scope.envs[0]?.id || "",
         defaultProfileId: scope.profiles[0]?.id || "",
@@ -2627,7 +4131,7 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
       };
     }
   });
-  card.appendChild(taskSection.details);
+  body.appendChild(taskSection.details);
 
   const shortcutSection = buildScopedModuleSection({
     title: "Toolbar Shortcuts",
@@ -2638,6 +4142,11 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     localLabel: "Workspace-specific",
     localContainerClass: "workspace-shortcuts",
     buildCard: buildShortcutCard,
+    stateKey: `workspace:${card.dataset.id}:shortcuts`,
+    inheritedFrom: () => ({
+      label: "Global",
+      onClick: () => focusGlobalModule("shortcuts")
+    }),
     cardOptions: () => {
       const scope = getWorkspaceScopeData(card);
       return { envs: scope.envs, profiles: scope.profiles, tasks: scope.tasks };
@@ -2646,7 +4155,10 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
       const scope = getWorkspaceScopeData(card);
       return {
         id: newShortcutId(),
-        name: "New Shortcut",
+        name: buildUniqueNumberedName(
+          "New Shortcut",
+          collectNames(container, ".shortcut-name")
+        ),
         envId: scope.envs[0]?.id || "",
         profileId: scope.profiles[0]?.id || "",
         taskId: scope.tasks[0]?.id || "",
@@ -2654,14 +4166,29 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
       };
     }
   });
-  card.appendChild(shortcutSection.details);
+  body.appendChild(shortcutSection.details);
 
   const sitesSection = document.createElement("details");
   sitesSection.className = "panel sub-panel";
+  sitesSection.dataset.stateKey = `workspace:${card.dataset.id}:sites`;
   const sitesSummary = document.createElement("summary");
   sitesSummary.className = "panel-summary";
-  sitesSummary.innerHTML =
-    '<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">Sites</h3>';
+  const sitesSummaryRow = document.createElement("div");
+  sitesSummaryRow.className = "panel-summary-row";
+  const sitesSummaryLeft = document.createElement("div");
+  sitesSummaryLeft.className = "panel-summary-left";
+  const sitesSummaryRight = document.createElement("div");
+  sitesSummaryRight.className = "panel-summary-right";
+  const sitesSummaryTitle = document.createElement("h3");
+  sitesSummaryTitle.textContent = "Sites";
+  sitesSummaryTitle.style.display = "inline";
+  sitesSummaryTitle.style.fontSize = "13px";
+  sitesSummaryTitle.style.fontWeight = "600";
+  sitesSummaryTitle.style.margin = "0";
+  sitesSummaryLeft.appendChild(sitesSummaryTitle);
+  sitesSummaryRow.appendChild(sitesSummaryLeft);
+  sitesSummaryRow.appendChild(sitesSummaryRight);
+  sitesSummary.appendChild(sitesSummaryRow);
   sitesSection.appendChild(sitesSummary);
   const sitesBody = document.createElement("div");
   sitesBody.className = "panel-body";
@@ -2671,7 +4198,8 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
   renderWorkspaceSitesList(siteList, card.dataset.id, allSites);
   sitesBody.appendChild(siteList);
   sitesSection.appendChild(sitesBody);
-  card.appendChild(sitesSection);
+  registerDetail(sitesSection, sitesSection.open);
+  body.appendChild(sitesSection);
 
   return card;
 }
@@ -2719,9 +4247,10 @@ function collectSites() {
 }
 
 function buildSiteCard(site, allWorkspaces = []) {
-  const card = document.createElement("div");
-  card.className = "site-card panel";
+  const card = document.createElement("details");
+  card.className = "site-card";
   card.dataset.id = site.id || newSiteId();
+  card.dataset.stateKey = `site:${card.dataset.id}`;
 
   const row = document.createElement("div");
   row.className = "row site-header";
@@ -2729,7 +4258,7 @@ function buildSiteCard(site, allWorkspaces = []) {
 
   const nameField = document.createElement("div");
   nameField.className = "field";
-  nameField.style.flex = "0.6";
+  nameField.style.flex = "3";
   const nameLabel = document.createElement("label");
   nameLabel.textContent = "Site name";
   const nameInput = document.createElement("input");
@@ -2744,9 +4273,16 @@ function buildSiteCard(site, allWorkspaces = []) {
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
 
+  const { body, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled Site",
+    { subPanel: false }
+  );
+
   const patternField = document.createElement("div");
   patternField.className = "field";
-  patternField.style.flex = "1";
+  patternField.style.flex = "3";
   const patternLabel = document.createElement("label");
   patternLabel.textContent = "URL Pattern";
   const patternInput = document.createElement("input");
@@ -2763,6 +4299,7 @@ function buildSiteCard(site, allWorkspaces = []) {
 
   const wsField = document.createElement("div");
   wsField.className = "field";
+  wsField.style.flex = "2";
   const wsLabel = document.createElement("label");
   wsLabel.textContent = "Workspace";
   const wsSelect = document.createElement("select");
@@ -2780,6 +4317,14 @@ function buildSiteCard(site, allWorkspaces = []) {
   wsSelect.value = site.workspaceId || "global";
   wsField.appendChild(wsLabel);
   wsField.appendChild(wsSelect);
+
+  const getSiteInheritedSource = (module) => () => {
+    const workspaceId = wsSelect.value || "global";
+    return {
+      label: getWorkspaceNameById(workspaceId),
+      onClick: () => focusWorkspaceModule(workspaceId, module)
+    };
+  };
 
   wsSelect.addEventListener("change", () => {
     const currentSites = collectSites();
@@ -2813,8 +4358,8 @@ function buildSiteCard(site, allWorkspaces = []) {
   row.appendChild(nameField);
   row.appendChild(patternField);
   row.appendChild(wsField);
-  row.appendChild(deleteBtn);
-  card.appendChild(row);
+  summaryRight.appendChild(deleteBtn);
+  body.appendChild(row);
 
   const extractField = document.createElement("div");
   extractField.className = "field";
@@ -2830,13 +4375,16 @@ function buildSiteCard(site, allWorkspaces = []) {
   });
   extractField.appendChild(extractLabel);
   extractField.appendChild(extractInput);
-  card.appendChild(extractField);
+  body.appendChild(extractField);
 
-  const appearanceSection = buildAppearanceSection({
-    theme: site.theme || "inherit",
-    toolbarPosition: site.toolbarPosition || "inherit"
-  });
-  card.appendChild(appearanceSection);
+  const appearanceSection = buildAppearanceSection(
+    {
+      theme: site.theme || "inherit",
+      toolbarPosition: site.toolbarPosition || "inherit"
+    },
+    { stateKey: `site:${card.dataset.id}:appearance` }
+  );
+  body.appendChild(appearanceSection);
 
   const disabledInherited = site.disabledInherited || {};
   const globalApiConfigs = collectApiConfigs();
@@ -2846,10 +4394,35 @@ function buildSiteCard(site, allWorkspaces = []) {
 
   const apiConfigSection = document.createElement("details");
   apiConfigSection.className = "panel sub-panel";
+  apiConfigSection.dataset.stateKey = `site:${card.dataset.id}:apiConfigs`;
   const apiSummary = document.createElement("summary");
   apiSummary.className = "panel-summary";
-  apiSummary.innerHTML =
-    '<h3 style="display:inline; font-size: 13px; font-weight: 600; margin:0;">API Configurations</h3>';
+  const apiSummaryRow = document.createElement("div");
+  apiSummaryRow.className = "panel-summary-row";
+  const apiSummaryLeft = document.createElement("div");
+  apiSummaryLeft.className = "panel-summary-left";
+  const apiSummaryRight = document.createElement("div");
+  apiSummaryRight.className = "panel-summary-right";
+  const apiSummaryTitle = document.createElement("h3");
+  apiSummaryTitle.textContent = "API Configurations";
+  apiSummaryTitle.style.display = "inline";
+  apiSummaryTitle.style.fontSize = "13px";
+  apiSummaryTitle.style.fontWeight = "600";
+  apiSummaryTitle.style.margin = "0";
+  const apiSummaryLink = document.createElement("button");
+  apiSummaryLink.type = "button";
+  apiSummaryLink.className = "panel-meta-link hint-accent";
+  apiSummaryLink.textContent = "Global";
+  apiSummaryLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    focusGlobalApiConfigSection();
+  });
+  apiSummaryLeft.appendChild(apiSummaryTitle);
+  apiSummaryLeft.appendChild(apiSummaryLink);
+  apiSummaryRow.appendChild(apiSummaryLeft);
+  apiSummaryRow.appendChild(apiSummaryRight);
+  apiSummary.appendChild(apiSummaryRow);
   apiConfigSection.appendChild(apiSummary);
   const apiBody = document.createElement("div");
   apiBody.className = "panel-body";
@@ -2865,7 +4438,8 @@ function buildSiteCard(site, allWorkspaces = []) {
   apiList.dataset.module = "apiConfigs";
   apiBody.appendChild(apiList);
   apiConfigSection.appendChild(apiBody);
-  card.appendChild(apiConfigSection);
+  registerDetail(apiConfigSection, apiConfigSection.open);
+  body.appendChild(apiConfigSection);
 
   const resolveWorkspaceScope = () => {
     const selectedWorkspaceId = wsSelect.value || "global";
@@ -2892,15 +4466,20 @@ function buildSiteCard(site, allWorkspaces = []) {
     localLabel: "Site-specific",
     localContainerClass: "site-envs",
     buildCard: buildEnvConfigCard,
+    stateKey: `site:${card.dataset.id}:envs`,
+    inheritedFrom: getSiteInheritedSource("envs"),
     newItemFactory: (container) => ({
       id: newEnvConfigId(),
-      name: buildUniqueDefaultName(collectNames(container, ".env-config-name")),
+      name: buildUniqueNumberedName(
+        "New Environment",
+        collectNames(container, ".env-config-name")
+      ),
       apiConfigId: getSiteApiConfigs(card)[0]?.id || "",
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
       enabled: true
     })
   });
-  card.appendChild(envSection.details);
+  body.appendChild(envSection.details);
 
   const profileSection = buildScopedModuleSection({
     title: "Profiles",
@@ -2911,14 +4490,19 @@ function buildSiteCard(site, allWorkspaces = []) {
     localLabel: "Site-specific",
     localContainerClass: "site-profiles",
     buildCard: buildProfileCard,
+    stateKey: `site:${card.dataset.id}:profiles`,
+    inheritedFrom: getSiteInheritedSource("profiles"),
     newItemFactory: (container) => ({
       id: newProfileId(),
-      name: buildUniqueDefaultName(collectNames(container, ".profile-name")),
+      name: buildUniqueNumberedName(
+        "New Profile",
+        collectNames(container, ".profile-name")
+      ),
       text: "",
       enabled: true
     })
   });
-  card.appendChild(profileSection.details);
+  body.appendChild(profileSection.details);
 
   const taskSection = buildScopedModuleSection({
     title: "Tasks",
@@ -2929,6 +4513,8 @@ function buildSiteCard(site, allWorkspaces = []) {
     localLabel: "Site-specific",
     localContainerClass: "site-tasks",
     buildCard: buildTaskCard,
+    stateKey: `site:${card.dataset.id}:tasks`,
+    inheritedFrom: getSiteInheritedSource("tasks"),
     cardOptions: () => {
       const scope = getSiteScopeData(card);
       return { envs: scope.envs, profiles: scope.profiles };
@@ -2937,7 +4523,10 @@ function buildSiteCard(site, allWorkspaces = []) {
       const scope = getSiteScopeData(card);
       return {
         id: newTaskId(),
-        name: buildUniqueDefaultName(collectNames(container, ".task-name")),
+        name: buildUniqueNumberedName(
+          "New Task",
+          collectNames(container, ".task-name")
+        ),
         text: "",
         defaultEnvId: scope.envs[0]?.id || "",
         defaultProfileId: scope.profiles[0]?.id || "",
@@ -2945,7 +4534,7 @@ function buildSiteCard(site, allWorkspaces = []) {
       };
     }
   });
-  card.appendChild(taskSection.details);
+  body.appendChild(taskSection.details);
 
   const shortcutSection = buildScopedModuleSection({
     title: "Toolbar Shortcuts",
@@ -2956,6 +4545,8 @@ function buildSiteCard(site, allWorkspaces = []) {
     localLabel: "Site-specific",
     localContainerClass: "site-shortcuts",
     buildCard: buildShortcutCard,
+    stateKey: `site:${card.dataset.id}:shortcuts`,
+    inheritedFrom: getSiteInheritedSource("shortcuts"),
     cardOptions: () => {
       const scope = getSiteScopeData(card);
       return { envs: scope.envs, profiles: scope.profiles, tasks: scope.tasks };
@@ -2964,7 +4555,10 @@ function buildSiteCard(site, allWorkspaces = []) {
       const scope = getSiteScopeData(card);
       return {
         id: newShortcutId(),
-        name: "New Shortcut",
+        name: buildUniqueNumberedName(
+          "New Shortcut",
+          collectNames(container, ".shortcut-name")
+        ),
         envId: scope.envs[0]?.id || "",
         profileId: scope.profiles[0]?.id || "",
         taskId: scope.tasks[0]?.id || "",
@@ -2972,18 +4566,18 @@ function buildSiteCard(site, allWorkspaces = []) {
       };
     }
   });
-  card.appendChild(shortcutSection.details);
+  body.appendChild(shortcutSection.details);
 
   return card;
 }
 
 function buildTaskCard(task, container = tasksContainer, options = {}) {
-  const card = document.createElement("div");
+  const card = document.createElement("details");
   card.className = "task-card";
   card.dataset.id = task.id || newTaskId();
+  card.dataset.stateKey = `task:${card.dataset.id}`;
+  const taskKey = String(card.dataset.id || "").replace(/[^a-zA-Z0-9_-]/g, "_");
 
-  const enabledLabel = document.createElement("label");
-  enabledLabel.className = "toggle-label";
   const enabledInput = document.createElement("input");
   enabledInput.type = "checkbox";
   enabledInput.className = "config-enabled";
@@ -2992,39 +4586,43 @@ function buildTaskCard(task, container = tasksContainer, options = {}) {
     updateShortcutOptions();
     scheduleSidebarErrors();
   });
-  enabledLabel.appendChild(enabledInput);
-  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  enabledInput.classList.add("hidden");
 
-  const nameField = document.createElement("div");
-  nameField.className = "field";
   const nameLabel = document.createElement("label");
   nameLabel.textContent = "Name";
   const nameInput = document.createElement("input");
   nameInput.type = "text";
+  nameInput.id = `task-name-${taskKey}`;
   nameInput.value = task.name || "";
-  nameInput.className = "task-name";
-  nameField.appendChild(nameLabel);
-  nameField.appendChild(nameInput);
+  nameInput.className = "task-name task-field-input";
+  nameLabel.htmlFor = nameInput.id;
+  nameLabel.className = "task-field-label";
+  const { body, summaryLeft, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled"
+  );
+  const enabledToggle = buildEnabledToggleButton(enabledInput);
+  summaryLeft.prepend(enabledToggle);
+  summaryLeft.appendChild(enabledInput);
 
-  const envField = document.createElement("div");
-  envField.className = "field";
   const envLabel = document.createElement("label");
   envLabel.textContent = "Default environment";
   const envSelect = document.createElement("select");
-  envSelect.className = "task-env-select";
+  envSelect.id = `task-env-${taskKey}`;
+  envSelect.className = "task-env-select task-field-input";
   envSelect.dataset.preferred = task.defaultEnvId || "";
-  envField.appendChild(envLabel);
-  envField.appendChild(envSelect);
+  envLabel.htmlFor = envSelect.id;
+  envLabel.className = "task-field-label";
 
-  const profileField = document.createElement("div");
-  profileField.className = "field";
   const profileLabel = document.createElement("label");
   profileLabel.textContent = "Default profile";
   const profileSelect = document.createElement("select");
-  profileSelect.className = "task-profile-select";
+  profileSelect.id = `task-profile-${taskKey}`;
+  profileSelect.className = "task-profile-select task-field-input";
   profileSelect.dataset.preferred = task.defaultProfileId || "";
-  profileField.appendChild(profileLabel);
-  profileField.appendChild(profileSelect);
+  profileLabel.htmlFor = profileSelect.id;
+  profileLabel.className = "task-field-label";
 
   const textField = document.createElement("div");
   textField.className = "field";
@@ -3062,7 +4660,7 @@ function buildTaskCard(task, container = tasksContainer, options = {}) {
   moveDownBtn.textContent = "Down";
   const addBelowBtn = document.createElement("button");
   addBelowBtn.type = "button";
-  addBelowBtn.className = "ghost add-below";
+  addBelowBtn.className = "accent add-below";
   addBelowBtn.textContent = "Add";
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
@@ -3072,26 +4670,33 @@ function buildTaskCard(task, container = tasksContainer, options = {}) {
   moveTopBtn.addEventListener("click", () => {
     const first = container.firstElementChild;
     if (!first || first === card) return;
-    container.insertBefore(card, first);
+    animateCardMove(card, () => {
+      container.insertBefore(card, first);
+    }, { scrollToCenter: true });
     updateTaskControls(container);
   });
 
   moveUpBtn.addEventListener("click", () => {
     const previous = card.previousElementSibling;
     if (!previous) return;
-    container.insertBefore(card, previous);
+    animateCardMove(card, () => {
+      container.insertBefore(card, previous);
+    });
     updateTaskControls(container);
   });
 
   moveDownBtn.addEventListener("click", () => {
     const next = card.nextElementSibling;
     if (!next) return;
-    container.insertBefore(card, next.nextElementSibling);
+    animateCardMove(card, () => {
+      container.insertBefore(card, next.nextElementSibling);
+    });
     updateTaskControls(container);
   });
 
   addBelowBtn.addEventListener("click", () => {
-    const name = buildUniqueDefaultName(
+    const name = buildUniqueNumberedName(
+      "New Task",
       collectNames(container, ".task-name")
     );
     const defaultEnvId =
@@ -3107,19 +4712,38 @@ function buildTaskCard(task, container = tasksContainer, options = {}) {
       defaultProfileId
     }, container, scope);
     card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
     updateTaskControls(container);
     updateTaskEnvOptions();
     updateTaskProfileOptions();
   });
 
-  const duplicateControls = buildDuplicateControls("tasks", () => ({
+  const getSourceData = () => ({
     id: card.dataset.id,
     name: nameInput.value || "Untitled",
     text: textArea.value,
     defaultEnvId: envSelect.value || "",
     defaultProfileId: profileSelect.value || "",
     enabled: enabledInput.checked
-  }));
+  });
+  const duplicateControls = buildDuplicateControls("tasks", getSourceData, {
+    onHere: () => {
+      const sourceRect = card.getBoundingClientRect();
+      const scope = getTaskScopeForContainer(container);
+      const newCard = buildDuplicateCard("tasks", getSourceData(), container, scope);
+      if (!newCard) return;
+      card.insertAdjacentElement("afterend", newCard);
+      openDetails(newCard);
+      animateDuplicateFromRect(newCard, sourceRect);
+      updateTaskControls(container);
+      updateTaskEnvOptions();
+      updateTaskProfileOptions();
+      scheduleSidebarErrors();
+      centerCardInViewAfterLayout(newCard);
+    },
+    sourceCard: card
+  });
 
   deleteBtn.addEventListener("click", () => {
     card.remove();
@@ -3130,38 +4754,46 @@ function buildTaskCard(task, container = tasksContainer, options = {}) {
   actions.appendChild(moveTopBtn);
   actions.appendChild(moveUpBtn);
   actions.appendChild(moveDownBtn);
-  actions.appendChild(addBelowBtn);
+  const moveControls = buildMoveControls("tasks", card, container);
+  actions.appendChild(moveControls);
   actions.appendChild(duplicateControls);
+  actions.appendChild(addBelowBtn);
   actions.appendChild(deleteBtn);
 
-  card.appendChild(enabledLabel);
-  card.appendChild(nameField);
-  card.appendChild(envField);
-  card.appendChild(profileField);
-  card.appendChild(textField);
-  card.appendChild(actions);
+  const fieldsWrap = document.createElement("div");
+  fieldsWrap.className = "task-fields";
+  fieldsWrap.appendChild(nameLabel);
+  fieldsWrap.appendChild(envLabel);
+  fieldsWrap.appendChild(profileLabel);
+  fieldsWrap.appendChild(nameInput);
+  fieldsWrap.appendChild(envSelect);
+  fieldsWrap.appendChild(profileSelect);
+
+  body.appendChild(fieldsWrap);
+  body.appendChild(textField);
+  summaryRight.appendChild(actions);
 
   nameInput.addEventListener("input", () => updateShortcutOptions());
 
   return card;
 }
 
-function buildShortcutCard(shortcut, _container, options = {}) {
-  const card = document.createElement("div");
+function buildShortcutCard(shortcut, container = shortcutsContainer, options = {}) {
+  const card = document.createElement("details");
   card.className = "shortcut-card";
   card.dataset.id = shortcut.id || newShortcutId();
+  card.dataset.stateKey = `shortcut:${card.dataset.id}`;
+  const shortcutKey = String(card.dataset.id || "").replace(/[^a-zA-Z0-9_-]/g, "_");
 
-  const enabledLabel = document.createElement("label");
-  enabledLabel.className = "toggle-label";
   const enabledInput = document.createElement("input");
   enabledInput.type = "checkbox";
   enabledInput.className = "config-enabled";
   enabledInput.checked = shortcut.enabled !== false;
   enabledInput.addEventListener("change", () => {
+    updateShortcutOptions();
     scheduleSidebarErrors();
   });
-  enabledLabel.appendChild(enabledInput);
-  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  enabledInput.classList.add("hidden");
 
   const nameField = document.createElement("div");
   nameField.className = "field";
@@ -3169,18 +4801,33 @@ function buildShortcutCard(shortcut, _container, options = {}) {
   nameLabel.textContent = "Name";
   const nameInput = document.createElement("input");
   nameInput.type = "text";
+  nameInput.id = `shortcut-name-${shortcutKey}`;
   nameInput.value = shortcut.name || "";
-  nameInput.className = "shortcut-name";
-  nameInput.addEventListener("input", () => scheduleSidebarErrors());
+  nameInput.className = "shortcut-name shortcut-field-input";
+  nameInput.addEventListener("input", () => {
+    updateShortcutOptions();
+    scheduleSidebarErrors();
+  });
+  nameLabel.htmlFor = nameInput.id;
+  nameLabel.className = "shortcut-field-label";
+  const { body, summaryLeft, summaryRight } = setupCardPanel(
+    card,
+    nameInput,
+    "Untitled"
+  );
+  const enabledToggle = buildEnabledToggleButton(enabledInput);
+  summaryLeft.prepend(enabledToggle);
+  summaryLeft.appendChild(enabledInput);
   nameField.appendChild(nameLabel);
   nameField.appendChild(nameInput);
 
-  const envField = document.createElement("div");
-  envField.className = "field";
   const envLabel = document.createElement("label");
   envLabel.textContent = "Environment";
   const envSelect = document.createElement("select");
-  envSelect.className = "shortcut-env";
+  envSelect.id = `shortcut-env-${shortcutKey}`;
+  envSelect.className = "shortcut-env shortcut-field-input";
+  envLabel.htmlFor = envSelect.id;
+  envLabel.className = "shortcut-field-label";
   const envs = (options.envs || collectEnvConfigs()).filter((env) =>
     isEnabled(env.enabled)
   );
@@ -3191,15 +4838,14 @@ function buildShortcutCard(shortcut, _container, options = {}) {
     envSelect.appendChild(opt);
   }
   envSelect.value = shortcut.envId || (envs[0]?.id || "");
-  envField.appendChild(envLabel);
-  envField.appendChild(envSelect);
 
-  const profileField = document.createElement("div");
-  profileField.className = "field";
   const profileLabel = document.createElement("label");
   profileLabel.textContent = "Profile";
   const profileSelect = document.createElement("select");
-  profileSelect.className = "shortcut-profile";
+  profileSelect.id = `shortcut-profile-${shortcutKey}`;
+  profileSelect.className = "shortcut-profile shortcut-field-input";
+  profileLabel.htmlFor = profileSelect.id;
+  profileLabel.className = "shortcut-field-label";
   const profiles = (options.profiles || collectProfiles()).filter((profile) =>
     isEnabled(profile.enabled)
   );
@@ -3210,15 +4856,14 @@ function buildShortcutCard(shortcut, _container, options = {}) {
     profileSelect.appendChild(opt);
   }
   profileSelect.value = shortcut.profileId || (profiles[0]?.id || "");
-  profileField.appendChild(profileLabel);
-  profileField.appendChild(profileSelect);
 
-  const taskField = document.createElement("div");
-  taskField.className = "field";
   const taskLabel = document.createElement("label");
   taskLabel.textContent = "Task";
   const taskSelect = document.createElement("select");
-  taskSelect.className = "shortcut-task";
+  taskSelect.id = `shortcut-task-${shortcutKey}`;
+  taskSelect.className = "shortcut-task shortcut-field-input";
+  taskLabel.htmlFor = taskSelect.id;
+  taskLabel.className = "shortcut-field-label";
   const tasks = (options.tasks || collectTasks()).filter((task) =>
     isEnabled(task.enabled)
   );
@@ -3229,11 +4874,86 @@ function buildShortcutCard(shortcut, _container, options = {}) {
     taskSelect.appendChild(opt);
   }
   taskSelect.value = shortcut.taskId || (tasks[0]?.id || "");
-  taskField.appendChild(taskLabel);
-  taskField.appendChild(taskSelect);
+  const fieldsWrap = document.createElement("div");
+  fieldsWrap.className = "shortcut-fields";
+  fieldsWrap.appendChild(nameLabel);
+  fieldsWrap.appendChild(envLabel);
+  fieldsWrap.appendChild(profileLabel);
+  fieldsWrap.appendChild(taskLabel);
+  fieldsWrap.appendChild(nameInput);
+  fieldsWrap.appendChild(envSelect);
+  fieldsWrap.appendChild(profileSelect);
+  fieldsWrap.appendChild(taskSelect);
 
   const actions = document.createElement("div");
   actions.className = "shortcut-actions";
+
+  const moveTopBtn = document.createElement("button");
+  moveTopBtn.type = "button";
+  moveTopBtn.className = "ghost move-top";
+  moveTopBtn.textContent = "Top";
+  const moveUpBtn = document.createElement("button");
+  moveUpBtn.type = "button";
+  moveUpBtn.className = "ghost move-up";
+  moveUpBtn.textContent = "Up";
+  const moveDownBtn = document.createElement("button");
+  moveDownBtn.type = "button";
+  moveDownBtn.className = "ghost move-down";
+  moveDownBtn.textContent = "Down";
+  const addBelowBtn = document.createElement("button");
+  addBelowBtn.type = "button";
+  addBelowBtn.className = "accent add-below";
+  addBelowBtn.textContent = "Add";
+
+  moveTopBtn.addEventListener("click", () => {
+    const first = container.firstElementChild;
+    if (!first || first === card) return;
+    animateCardMove(card, () => {
+      container.insertBefore(card, first);
+    }, { scrollToCenter: true });
+    updateShortcutControls(container);
+    updateShortcutOptions();
+  });
+
+  moveUpBtn.addEventListener("click", () => {
+    const previous = card.previousElementSibling;
+    if (!previous) return;
+    animateCardMove(card, () => {
+      container.insertBefore(card, previous);
+    });
+    updateShortcutControls(container);
+    updateShortcutOptions();
+  });
+
+  moveDownBtn.addEventListener("click", () => {
+    const next = card.nextElementSibling;
+    if (!next) return;
+    animateCardMove(card, () => {
+      container.insertBefore(card, next.nextElementSibling);
+    });
+    updateShortcutControls(container);
+    updateShortcutOptions();
+  });
+
+  addBelowBtn.addEventListener("click", () => {
+    const name = buildUniqueNumberedName(
+      "New Shortcut",
+      collectNames(container, ".shortcut-name")
+    );
+    const newCard = buildShortcutCard({
+      id: newShortcutId(),
+      name,
+      envId: envSelect.value || envs[0]?.id || "",
+      profileId: profileSelect.value || profiles[0]?.id || "",
+      taskId: taskSelect.value || tasks[0]?.id || "",
+      enabled: true
+    }, container, options);
+    card.insertAdjacentElement("afterend", newCard);
+    openDetails(newCard);
+    centerCardInView(newCard);
+    updateShortcutOptions();
+    updateShortcutControls(container);
+  });
 
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
@@ -3241,28 +4961,71 @@ function buildShortcutCard(shortcut, _container, options = {}) {
   deleteBtn.textContent = "Delete";
   deleteBtn.addEventListener("click", () => {
     card.remove();
+    updateShortcutControls(container);
+    updateShortcutOptions();
     scheduleSidebarErrors();
   });
 
-  card.appendChild(enabledLabel);
-  card.appendChild(nameField);
-  card.appendChild(envField);
-  card.appendChild(profileField);
-  card.appendChild(taskField);
-  actions.appendChild(
-    buildDuplicateControls("shortcuts", () => ({
-      id: card.dataset.id,
-      name: nameInput.value || "Untitled Shortcut",
-      envId: envSelect.value || "",
-      profileId: profileSelect.value || "",
-      taskId: taskSelect.value || "",
-      enabled: enabledInput.checked
-    }))
-  );
+  actions.appendChild(moveTopBtn);
+  actions.appendChild(moveUpBtn);
+  actions.appendChild(moveDownBtn);
+  body.appendChild(fieldsWrap);
+  const moveControls = buildMoveControls("shortcuts", card, container);
+  const getSourceData = () => ({
+    id: card.dataset.id,
+    name: nameInput.value || "Untitled Shortcut",
+    envId: envSelect.value || "",
+    profileId: profileSelect.value || "",
+    taskId: taskSelect.value || "",
+    enabled: enabledInput.checked
+  });
+  const duplicateControls = buildDuplicateControls("shortcuts", getSourceData, {
+    onHere: () => {
+      const sourceRect = card.getBoundingClientRect();
+      const siteCard = container.closest(".site-card");
+      const workspaceCard = container.closest(".workspace-card");
+      const scope = siteCard
+        ? getSiteScopeData(siteCard)
+        : workspaceCard
+          ? getWorkspaceScopeData(workspaceCard)
+          : {
+              envs: collectEnvConfigs().filter((env) => isEnabled(env.enabled)),
+              profiles: collectProfiles().filter((profile) => isEnabled(profile.enabled)),
+              tasks: collectTasks().filter((task) => isEnabled(task.enabled))
+            };
+      const newCard = buildDuplicateCard("shortcuts", getSourceData(), container, scope);
+      if (!newCard) return;
+      card.insertAdjacentElement("afterend", newCard);
+      openDetails(newCard);
+      animateDuplicateFromRect(newCard, sourceRect);
+      updateShortcutOptions();
+      updateShortcutControls(container);
+      scheduleSidebarErrors();
+      centerCardInViewAfterLayout(newCard);
+    },
+    sourceCard: card
+  });
+  actions.appendChild(moveControls);
+  actions.appendChild(duplicateControls);
+  actions.appendChild(addBelowBtn);
   actions.appendChild(deleteBtn);
-  card.appendChild(actions);
+  summaryRight.appendChild(actions);
 
   return card;
+}
+
+function updateShortcutControls(container = shortcutsContainer) {
+  if (!container) return;
+  const cards = [...container.querySelectorAll(".shortcut-card")];
+  cards.forEach((card, index) => {
+    const moveTopBtn = card.querySelector(".move-top");
+    const moveUpBtn = card.querySelector(".move-up");
+    const moveDownBtn = card.querySelector(".move-down");
+    if (moveTopBtn) moveTopBtn.disabled = index === 0;
+    if (moveUpBtn) moveUpBtn.disabled = index === 0;
+    if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
+  });
+  scheduleSidebarErrors();
 }
 
 function updateTaskControls(container = tasksContainer) {
@@ -3421,6 +5184,42 @@ function updateSidebarErrors() {
   if (!enabledApiConfigs.length) errors.push("No API configs enabled.");
   if (!enabledApiKeys.length) errors.push("No API keys enabled.");
 
+  const validateTaskDefaults = (label, taskList, envList, profileList) => {
+    const enabledEnvIds = new Set(
+      envList.filter((env) => isEnabled(env.enabled)).map((env) => env.id)
+    );
+    const enabledProfileIds = new Set(
+      profileList
+        .filter((profile) => isEnabled(profile.enabled))
+        .map((profile) => profile.id)
+    );
+    taskList.filter((task) => isEnabled(task.enabled)).forEach((task) => {
+      const taskName = task.name || "Untitled Task";
+      if (enabledEnvIds.size && !task.defaultEnvId) {
+        errors.push(`${label} task "${taskName}" is missing a default environment.`);
+      } else if (
+        task.defaultEnvId &&
+        enabledEnvIds.size &&
+        !enabledEnvIds.has(task.defaultEnvId)
+      ) {
+        errors.push(
+          `${label} task "${taskName}" default environment is disabled or missing.`
+        );
+      }
+      if (enabledProfileIds.size && !task.defaultProfileId) {
+        errors.push(`${label} task "${taskName}" is missing a default profile.`);
+      } else if (
+        task.defaultProfileId &&
+        enabledProfileIds.size &&
+        !enabledProfileIds.has(task.defaultProfileId)
+      ) {
+        errors.push(
+          `${label} task "${taskName}" default profile is disabled or missing.`
+        );
+      }
+    });
+  };
+
   if (enabledTasks.length) {
     const defaultTask = enabledTasks[0];
     if (!defaultTask.text) errors.push("Default task prompt is empty.");
@@ -3459,7 +5258,7 @@ function updateSidebarErrors() {
       }
     }
 
-    if (!defaultApiConfig.advanced) {
+    if (defaultApiConfig && !defaultApiConfig.advanced) {
       const key = enabledApiKeys.find(
         (entry) => entry.id === defaultApiConfig?.apiKeyId
       );
@@ -3468,6 +5267,26 @@ function updateSidebarErrors() {
       }
     }
   }
+
+  validateTaskDefaults("Global", tasks, envs, profiles);
+
+  workspaceCards.forEach((card) => {
+    const name =
+      card.querySelector(".workspace-name")?.value || "Untitled Workspace";
+    const scope = getWorkspaceScopeData(card);
+    const scopedTasks = collectTasks(card.querySelector(".workspace-tasks"));
+    validateTaskDefaults(`Workspace "${name}"`, scopedTasks, scope.envs, scope.profiles);
+  });
+
+  siteCards.forEach((card) => {
+    const name =
+      card.querySelector(".site-name")?.value ||
+      card.querySelector(".site-pattern")?.value ||
+      "Untitled Site";
+    const scope = getSiteScopeData(card);
+    const scopedTasks = collectTasks(card.querySelector(".site-tasks"));
+    validateTaskDefaults(`Site "${name}"`, scopedTasks, scope.envs, scope.profiles);
+  });
 
   const sites = collectSites();
   const patterns = siteCards
@@ -3633,6 +5452,7 @@ async function loadSettings() {
       await chrome.storage.local.set({ sites });
     }
   }
+  initialSiteIds = new Set((sites || []).map((site) => site?.id).filter(Boolean));
 
   // Load basic resources first so they are available for shortcuts/workspaces
   envConfigsContainer.innerHTML = "";
@@ -3904,6 +5724,7 @@ async function loadSettings() {
   for (const shortcut of normalizedShortcuts) {
     shortcutsContainer.appendChild(buildShortcutCard(shortcut));
   }
+  updateShortcutControls();
 
   workspacesContainer.innerHTML = "";
   for (const ws of workspaces) {
@@ -3933,6 +5754,96 @@ async function saveSettings() {
     const profiles = collectProfiles();
     const workspaces = collectWorkspaces();
     const sites = collectSites();
+    const previous = await getStorage([
+      "apiConfigs",
+      "envConfigs",
+      "profiles",
+      "tasks",
+      "shortcuts",
+      "workspaces",
+      "sites"
+    ]);
+    const previousWorkspaces = Array.isArray(previous.workspaces)
+      ? previous.workspaces
+      : [];
+    const globalRenameMaps = {
+      envs: buildRenameMap(previous.envConfigs, envConfigs),
+      profiles: buildRenameMap(previous.profiles, profiles),
+      tasks: buildRenameMap(previous.tasks, tasks),
+      shortcuts: buildRenameMap(previous.shortcuts, shortcuts)
+    };
+    const previousWorkspaceById = new Map(
+      previousWorkspaces.map((workspace) => [workspace.id, workspace])
+    );
+    const workspaceRenameMaps = new Map(
+      workspaces.map((workspace) => {
+        const previousWorkspace = previousWorkspaceById.get(workspace.id);
+        return [
+          workspace.id,
+          {
+            envs: buildRenameMap(previousWorkspace?.envConfigs, workspace.envConfigs),
+            profiles: buildRenameMap(previousWorkspace?.profiles, workspace.profiles),
+            tasks: buildRenameMap(previousWorkspace?.tasks, workspace.tasks),
+            shortcuts: buildRenameMap(
+              previousWorkspace?.shortcuts,
+              workspace.shortcuts
+            )
+          }
+        ];
+      })
+    );
+    const updatedWorkspaces = workspaces.map((workspace) => {
+      const disabled = workspace.disabledInherited || {};
+      return {
+        ...workspace,
+        disabledInherited: {
+          ...disabled,
+          envs: applyRenameMaps(disabled.envs, [globalRenameMaps.envs]),
+          profiles: applyRenameMaps(disabled.profiles, [globalRenameMaps.profiles]),
+          tasks: applyRenameMaps(disabled.tasks, [globalRenameMaps.tasks]),
+          shortcuts: applyRenameMaps(disabled.shortcuts, [globalRenameMaps.shortcuts]),
+          apiConfigs: filterDisabledIds(disabled.apiConfigs, apiConfigs)
+        }
+      };
+    });
+    const updatedSites = sites.map((site) => {
+      const workspaceId = site.workspaceId || "global";
+      const maps = workspaceRenameMaps.get(workspaceId) || {};
+      const disabled = site.disabledInherited || {};
+      return {
+        ...site,
+        disabledInherited: {
+          ...disabled,
+          envs: applyRenameMaps(disabled.envs, [
+            globalRenameMaps.envs,
+            maps.envs
+          ]),
+          profiles: applyRenameMaps(disabled.profiles, [
+            globalRenameMaps.profiles,
+            maps.profiles
+          ]),
+          tasks: applyRenameMaps(disabled.tasks, [
+            globalRenameMaps.tasks,
+            maps.tasks
+          ]),
+          shortcuts: applyRenameMaps(disabled.shortcuts, [
+            globalRenameMaps.shortcuts,
+            maps.shortcuts
+          ]),
+          apiConfigs: filterDisabledIds(disabled.apiConfigs, apiConfigs)
+        }
+      };
+    });
+    const storedSites = Array.isArray(previous.sites) ? previous.sites : [];
+    const mergedSites = [...updatedSites];
+    const mergedIds = new Set(updatedSites.map((site) => site.id));
+    storedSites.forEach((site) => {
+      if (!site?.id) return;
+      if (mergedIds.has(site.id)) return;
+      if (initialSiteIds.has(site.id)) return;
+      mergedIds.add(site.id);
+      mergedSites.push(site);
+    });
     const activeEnvConfigId = envConfigs[0]?.id || "";
     const activeEnv = envConfigs[0];
     const activeApiConfigId =
@@ -3961,10 +5872,11 @@ async function saveSettings() {
         : "bottom-right",
       toolbarAutoHide: toolbarAutoHide ? toolbarAutoHide.checked : true,
       alwaysShowOutput: alwaysShowOutput ? alwaysShowOutput.checked : false,
-      workspaces,
-      sites
+      workspaces: updatedWorkspaces,
+      sites: mergedSites
     });
     await chrome.storage.local.remove("presets");
+    captureSavedSnapshot();
     setStatus("Saved.");
   } catch (error) {
     console.error("Save failed:", error);
@@ -3976,7 +5888,9 @@ if (saveBtnSidebar) {
   saveBtnSidebar.addEventListener("click", () => void saveSettings());
 }
 addTaskBtn.addEventListener("click", () => {
-  const name = buildUniqueDefaultName(
+  openDetails(addTaskBtn.closest("details"));
+  const name = buildUniqueNumberedName(
+    "New Task",
     collectNames(tasksContainer, ".task-name")
   );
   const newCard = buildTaskCard({
@@ -3992,12 +5906,15 @@ addTaskBtn.addEventListener("click", () => {
   } else {
     tasksContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   updateTaskControls(tasksContainer);
   updateTaskEnvOptions();
   updateTaskProfileOptions();
 });
 
 addApiKeyBtn.addEventListener("click", () => {
+  openDetails(addApiKeyBtn.closest("details"));
   const name = buildUniqueDefaultName(
     collectNames(apiKeysContainer, ".api-key-name")
   );
@@ -4008,12 +5925,16 @@ addApiKeyBtn.addEventListener("click", () => {
   } else {
     apiKeysContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   updateApiConfigKeyOptions();
   updateApiKeyControls();
 });
 
 addApiConfigBtn.addEventListener("click", () => {
-  const name = buildUniqueDefaultName(
+  openDetails(addApiConfigBtn.closest("details"));
+  const name = buildUniqueNumberedName(
+    "New API",
     collectNames(apiConfigsContainer, ".api-config-name")
   );
   const newCard = buildApiConfigCard({
@@ -4031,13 +5952,17 @@ addApiConfigBtn.addEventListener("click", () => {
   } else {
     apiConfigsContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   updateApiConfigKeyOptions();
   updateEnvApiOptions();
   updateApiConfigControls();
 });
 
 addEnvConfigBtn.addEventListener("click", () => {
-  const name = buildUniqueDefaultName(
+  openDetails(addEnvConfigBtn.closest("details"));
+  const name = buildUniqueNumberedName(
+    "New Environment",
     collectNames(envConfigsContainer, ".env-config-name")
   );
   const fallbackApiConfigId =
@@ -4054,13 +5979,17 @@ addEnvConfigBtn.addEventListener("click", () => {
   } else {
     envConfigsContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   updateEnvApiOptions();
   updateEnvControls();
   updateTaskEnvOptions();
 });
 
 addProfileBtn.addEventListener("click", () => {
-  const name = buildUniqueDefaultName(
+  openDetails(addProfileBtn.closest("details"));
+  const name = buildUniqueNumberedName(
+    "New Profile",
     collectNames(profilesContainer, ".profile-name")
   );
   const newCard = buildProfileCard({
@@ -4074,11 +6003,14 @@ addProfileBtn.addEventListener("click", () => {
   } else {
     profilesContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   updateProfileControls(profilesContainer);
   updateTaskProfileOptions();
 });
 
 addWorkspaceBtn.addEventListener("click", () => {
+  openDetails(addWorkspaceBtn.closest("details"));
   const newCard = buildWorkspaceCard({
     id: newWorkspaceId(),
     name: "New Workspace",
@@ -4096,12 +6028,15 @@ addWorkspaceBtn.addEventListener("click", () => {
   } else {
     workspacesContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   refreshWorkspaceInheritedLists();
   scheduleSidebarErrors();
   updateToc(collectWorkspaces(), collectSites());
 });
 
 addSiteBtn.addEventListener("click", () => {
+  openDetails(addSiteBtn.closest("details"));
   const newCard = buildSiteCard({
     id: newSiteId(),
     name: "",
@@ -4121,15 +6056,22 @@ addSiteBtn.addEventListener("click", () => {
   } else {
     sitesContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
   refreshSiteInheritedLists();
   scheduleSidebarErrors();
   updateToc(collectWorkspaces(), collectSites());
 });
 
 addShortcutBtn.addEventListener("click", () => {
+  openDetails(addShortcutBtn.closest("details"));
+  const name = buildUniqueNumberedName(
+    "New Shortcut",
+    collectNames(shortcutsContainer, ".shortcut-name")
+  );
   const newCard = buildShortcutCard({
     id: newShortcutId(),
-    name: "New Shortcut",
+    name,
     envId: "",
     profileId: "",
     taskId: ""
@@ -4140,13 +6082,39 @@ addShortcutBtn.addEventListener("click", () => {
   } else {
     shortcutsContainer.appendChild(newCard);
   }
+  openDetails(newCard);
+  centerCardInView(newCard);
+  updateShortcutOptions();
+  updateShortcutControls();
   scheduleSidebarErrors();
 });
 
 themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
 initSidebarResize();
 
-loadSettings();
+document.addEventListener("click", (event) => {
+  const summary = event.target.closest("summary.panel-summary");
+  if (!summary) return;
+  if (event.target.closest("button")) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+});
+
+async function initSettings() {
+  suppressDirtyTracking = true;
+  await loadSettingsViewState();
+  await loadSettings();
+  initToc();
+  registerAllDetails();
+  restoreScrollPosition();
+  initDirtyObserver();
+  captureSavedSnapshot();
+  suppressDirtyTracking = false;
+  window.addEventListener("scroll", handleSettingsScroll, { passive: true });
+}
+
+void initSettings();
 
 function openDetailsChain(target) {
   let node = target;
@@ -4158,59 +6126,164 @@ function openDetailsChain(target) {
   }
 }
 
+function renderTocCardList(listEl, cards, nameSelector, fallbackLabel, onClick) {
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  const items = Array.from(cards || []);
+  items.forEach((card, index) => {
+    const name =
+      card.querySelector(nameSelector)?.value?.trim() ||
+      `${fallbackLabel} ${index + 1}`;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = "#";
+    a.textContent = name;
+    const cardClass =
+      [...(card?.classList || [])].find((cls) => cls.endsWith("-card")) ||
+      card?.classList?.[0] ||
+      "";
+    if (cardClass && card?.dataset?.id) {
+      a.dataset.tocTargetSelector = `.${cardClass}[data-id="${card.dataset.id}"]`;
+    }
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof onClick === "function") {
+        onClick(card);
+      }
+    });
+    li.appendChild(a);
+    listEl.appendChild(li);
+  });
+}
+
 function updateToc(workspaces, sites) {
   const wsList = document.getElementById("toc-workspaces-list");
   if (!wsList) return;
-  
+  const existingGroups = wsList.querySelectorAll("details.toc-group");
+  existingGroups.forEach((group) => {
+    const key = getDetailStateKey(group);
+    if (!key) return;
+    settingsViewState.open[key] = group.open;
+  });
+  scheduleSettingsViewStateSave();
+
   wsList.innerHTML = "";
   for (const ws of workspaces) {
     const li = document.createElement("li");
     const details = document.createElement("details");
     details.className = "toc-group toc-workspace";
+    details.dataset.stateKey = `toc:workspace:${ws.id}`;
     const summary = document.createElement("summary");
     const a = document.createElement("a");
     a.href = "#";
     a.textContent = ws.name || "Untitled";
+    a.dataset.tocTargetSelector = `.workspace-card[data-id="${ws.id}"]`;
     summary.appendChild(a);
     details.appendChild(summary);
 
     const subUl = document.createElement("ul");
     subUl.className = "toc-sub";
-    
-    const sections = [
-      "Appearance",
-      "API Configurations",
-      "Environments",
-      "Profiles",
-      "Tasks",
-      "Toolbar Shortcuts",
-      "Sites"
+    const sectionConfigs = [
+      { label: "Appearance" },
+      { label: "API Configurations" },
+      {
+        label: "Environments",
+        module: "envs",
+        containerSelector: ".workspace-envs",
+        cardSelector: ".env-config-card",
+        nameSelector: ".env-config-name",
+        fallback: "Environment"
+      },
+      {
+        label: "Profiles",
+        module: "profiles",
+        containerSelector: ".workspace-profiles",
+        cardSelector: ".profile-card",
+        nameSelector: ".profile-name",
+        fallback: "Profile"
+      },
+      {
+        label: "Tasks",
+        module: "tasks",
+        containerSelector: ".workspace-tasks",
+        cardSelector: ".task-card",
+        nameSelector: ".task-name",
+        fallback: "Task"
+      },
+      {
+        label: "Toolbar Shortcuts",
+        module: "shortcuts",
+        containerSelector: ".workspace-shortcuts",
+        cardSelector: ".shortcut-card",
+        nameSelector: ".shortcut-name",
+        fallback: "Shortcut"
+      },
+      { label: "Sites" }
     ];
-    for (const section of sections) {
-        const subLi = document.createElement("li");
-        const subA = document.createElement("a");
-        subA.textContent = section;
-        subA.href = "#";
-        subA.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const card = document.querySelector(`.workspace-card[data-id="${ws.id}"]`);
-            if (card) {
-                // Find details with summary text containing section name
-                const details = [...card.querySelectorAll("details")].find(d => 
-                  d.querySelector(".panel-summary").textContent.includes(section)
-                );
-                if (details) {
-                    openDetailsChain(details);
-                    details.scrollIntoView({ behavior: "smooth", block: "start" });
-                } else {
-                    card.scrollIntoView({ behavior: "smooth", block: "start" });
-                    openDetailsChain(document.getElementById("workspaces-panel"));
-                }
-            }
-        });
-        subLi.appendChild(subA);
-        subUl.appendChild(subLi);
+    for (const section of sectionConfigs) {
+      const subLi = document.createElement("li");
+      const link = document.createElement("a");
+      link.textContent = section.label;
+      link.href = "#";
+      const sectionKey = section.module
+        ? `workspace:${ws.id}:${section.module}`
+        : section.label === "Appearance"
+          ? `workspace:${ws.id}:appearance`
+          : section.label === "API Configurations"
+            ? `workspace:${ws.id}:apiConfigs`
+            : section.label === "Sites"
+              ? `workspace:${ws.id}:sites`
+              : "";
+      if (sectionKey) {
+        link.dataset.tocTargetSelector = `.workspace-card[data-id="${ws.id}"] details[data-state-key="${sectionKey}"]`;
+      }
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = document.querySelector(`.workspace-card[data-id="${ws.id}"]`);
+        if (card) {
+          const details = [...card.querySelectorAll("details")].find((d) => {
+            const heading = d.querySelector(".panel-summary h3, .panel-summary h2");
+            return heading && heading.textContent.trim() === section.label;
+          });
+          if (details) {
+            openDetailsChain(details);
+            details.scrollIntoView({ behavior: "smooth", block: "start" });
+          } else {
+            card.scrollIntoView({ behavior: "smooth", block: "start" });
+            openDetailsChain(document.getElementById("workspaces-panel"));
+          }
+        }
+      });
+      if (section.module) {
+        const details = document.createElement("details");
+        details.className = "toc-group toc-section";
+        details.dataset.stateKey = `toc:workspace:${ws.id}:${section.module}`;
+        const summary = document.createElement("summary");
+        summary.appendChild(link);
+        details.appendChild(summary);
+        const card = document.querySelector(`.workspace-card[data-id="${ws.id}"]`);
+        const container = card?.querySelector(section.containerSelector);
+        const list = document.createElement("ul");
+        list.className = "toc-sub toc-cards";
+        renderTocCardList(
+          list,
+          container?.querySelectorAll(section.cardSelector) || [],
+          section.nameSelector,
+          section.fallback,
+          (target) => {
+            openDetailsChain(target);
+            centerCardInView(target);
+          }
+        );
+        details.appendChild(list);
+        subLi.appendChild(details);
+        registerDetail(details, false);
+      } else {
+        subLi.appendChild(link);
+      }
+      subUl.appendChild(subLi);
     }
     
     a.addEventListener("click", (e) => {
@@ -4227,29 +6300,217 @@ function updateToc(workspaces, sites) {
     details.appendChild(subUl);
     li.appendChild(details);
     wsList.appendChild(li);
+    registerDetail(details, false);
   }
   
   const sitesList = document.getElementById("toc-sites-list");
   if (sitesList) {
+    const existingSiteGroups = sitesList.querySelectorAll("details.toc-group");
+    existingSiteGroups.forEach((group) => {
+      const key = getDetailStateKey(group);
+      if (!key) return;
+      settingsViewState.open[key] = group.open;
+    });
+    scheduleSettingsViewStateSave();
+
     sitesList.innerHTML = "";
     for (const site of sites) {
-        const li = document.createElement("li");
-        const a = document.createElement("a");
-        a.textContent = site.name || site.urlPattern || "Untitled Site";
-        a.href = "#";
-        a.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
-            if (card) {
-                card.scrollIntoView({ behavior: "smooth", block: "center" });
-                openDetailsChain(document.getElementById("sites-panel"));
+      const li = document.createElement("li");
+      const details = document.createElement("details");
+      details.className = "toc-group toc-site";
+      details.dataset.stateKey = `toc:site:${site.id}`;
+      const summary = document.createElement("summary");
+      const a = document.createElement("a");
+      a.textContent = site.name || site.urlPattern || "Untitled Site";
+      a.href = "#";
+      a.dataset.tocTargetSelector = `.site-card[data-id="${site.id}"]`;
+      summary.appendChild(a);
+      details.appendChild(summary);
+
+      const subUl = document.createElement("ul");
+      subUl.className = "toc-sub";
+      const sectionConfigs = [
+        { label: "Appearance" },
+        { label: "API Configurations" },
+        {
+          label: "Environments",
+          module: "envs",
+          containerSelector: ".site-envs",
+          cardSelector: ".env-config-card",
+          nameSelector: ".env-config-name",
+          fallback: "Environment"
+        },
+        {
+          label: "Profiles",
+          module: "profiles",
+          containerSelector: ".site-profiles",
+          cardSelector: ".profile-card",
+          nameSelector: ".profile-name",
+          fallback: "Profile"
+        },
+        {
+          label: "Tasks",
+          module: "tasks",
+          containerSelector: ".site-tasks",
+          cardSelector: ".task-card",
+          nameSelector: ".task-name",
+          fallback: "Task"
+        },
+        {
+          label: "Toolbar Shortcuts",
+          module: "shortcuts",
+          containerSelector: ".site-shortcuts",
+          cardSelector: ".shortcut-card",
+          nameSelector: ".shortcut-name",
+          fallback: "Shortcut"
+        }
+      ];
+      for (const section of sectionConfigs) {
+        const subLi = document.createElement("li");
+        const link = document.createElement("a");
+        link.textContent = section.label;
+        link.href = "#";
+        const sectionKey = section.module
+          ? `site:${site.id}:${section.module}`
+          : section.label === "Appearance"
+            ? `site:${site.id}:appearance`
+            : section.label === "API Configurations"
+              ? `site:${site.id}:apiConfigs`
+              : "";
+        if (sectionKey) {
+          link.dataset.tocTargetSelector = `.site-card[data-id="${site.id}"] details[data-state-key="${sectionKey}"]`;
+        }
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
+          if (card) {
+            const detailsMatch = [...card.querySelectorAll("details")].find((d) => {
+              const heading = d.querySelector(".panel-summary h3, .panel-summary h2");
+              return heading && heading.textContent.trim() === section.label;
+            });
+            if (detailsMatch) {
+              openDetailsChain(detailsMatch);
+              detailsMatch.scrollIntoView({ behavior: "smooth", block: "start" });
+            } else {
+              card.scrollIntoView({ behavior: "smooth", block: "start" });
+              openDetailsChain(document.getElementById("sites-panel"));
             }
+          }
         });
-        li.appendChild(a);
-        sitesList.appendChild(li);
+        if (section.module) {
+          const details = document.createElement("details");
+          details.className = "toc-group toc-section";
+          details.dataset.stateKey = `toc:site:${site.id}:${section.module}`;
+          const summary = document.createElement("summary");
+          summary.appendChild(link);
+          details.appendChild(summary);
+          const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
+          const container = card?.querySelector(section.containerSelector);
+          const list = document.createElement("ul");
+          list.className = "toc-sub toc-cards";
+          renderTocCardList(
+            list,
+            container?.querySelectorAll(section.cardSelector) || [],
+            section.nameSelector,
+            section.fallback,
+            (target) => {
+              openDetailsChain(target);
+              centerCardInView(target);
+            }
+          );
+          details.appendChild(list);
+          subLi.appendChild(details);
+          registerDetail(details, false);
+        } else {
+          subLi.appendChild(link);
+        }
+        subUl.appendChild(subLi);
+      }
+
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = document.querySelector(`.site-card[data-id="${site.id}"]`);
+        if (card) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+          openDetailsChain(document.getElementById("sites-panel"));
+        }
+        details.open = true;
+      });
+
+      details.appendChild(subUl);
+      li.appendChild(details);
+      sitesList.appendChild(li);
+      registerDetail(details, false);
     }
   }
+
+  const globalTocSections = document.querySelectorAll(".toc-global-section");
+  globalTocSections.forEach((section) => {
+    registerDetail(section, section.open);
+  });
+
+  renderTocCardList(
+    document.getElementById("toc-global-envs-list"),
+    envConfigsContainer?.querySelectorAll(".env-config-card"),
+    ".env-config-name",
+    "Environment",
+    (card) => {
+      openDetailsChain(card);
+      centerCardInView(card);
+    }
+  );
+  renderTocCardList(
+    document.getElementById("toc-global-profiles-list"),
+    profilesContainer?.querySelectorAll(".profile-card"),
+    ".profile-name",
+    "Profile",
+    (card) => {
+      openDetailsChain(card);
+      centerCardInView(card);
+    }
+  );
+  renderTocCardList(
+    document.getElementById("toc-global-tasks-list"),
+    tasksContainer?.querySelectorAll(".task-card"),
+    ".task-name",
+    "Task",
+    (card) => {
+      openDetailsChain(card);
+      centerCardInView(card);
+    }
+  );
+  renderTocCardList(
+    document.getElementById("toc-global-shortcuts-list"),
+    shortcutsContainer?.querySelectorAll(".shortcut-card"),
+    ".shortcut-name",
+    "Shortcut",
+    (card) => {
+      openDetailsChain(card);
+      centerCardInView(card);
+    }
+  );
+  renderTocCardList(
+    document.getElementById("toc-global-api-keys-list"),
+    apiKeysContainer?.querySelectorAll(".api-key-card"),
+    ".api-key-name",
+    "API Key",
+    (card) => {
+      openDetailsChain(card);
+      centerCardInView(card);
+    }
+  );
+  renderTocCardList(
+    document.getElementById("toc-global-api-configs-list"),
+    apiConfigsContainer?.querySelectorAll(".api-config-card"),
+    ".api-config-name",
+    "API Config",
+    (card) => {
+      openDetailsChain(card);
+      centerCardInView(card);
+    }
+  );
 
   const workspaceCards = document.querySelectorAll(".workspace-card");
   workspaceCards.forEach((card) => {
@@ -4257,9 +6518,17 @@ function updateToc(workspaces, sites) {
     if (!list) return;
     renderWorkspaceSitesList(list, card.dataset.id, sites);
   });
+  refreshTocTargets();
 }
 
 function initToc() {
+  const tocGroups = document.querySelectorAll(".toc-links .toc-group");
+  tocGroups.forEach((group, index) => {
+    if (!group.dataset.stateKey) {
+      group.dataset.stateKey = `toc-group:${index}`;
+    }
+    registerDetail(group, group.open);
+  });
   const links = document.querySelectorAll(".toc-links a[href^=\"#\"]");
   links.forEach((link) => {
     const href = link.getAttribute("href");
@@ -4279,9 +6548,14 @@ function initToc() {
       }
     });
   });
+  refreshTocTargets();
 }
 
-document.addEventListener("DOMContentLoaded", initToc);
+function handleSettingsInputChange() {
+  scheduleSidebarErrors();
+  scheduleDirtyCheck();
+  refreshInheritedSourceLabels();
+}
 
-document.addEventListener("input", scheduleSidebarErrors);
-document.addEventListener("change", scheduleSidebarErrors);
+document.addEventListener("input", handleSettingsInputChange);
+document.addEventListener("change", handleSettingsInputChange);

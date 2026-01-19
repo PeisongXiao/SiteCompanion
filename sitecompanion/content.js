@@ -590,7 +590,6 @@ const observer = new MutationObserver(() => {
 observer.observe(document.documentElement, { childList: true, subtree: true });
 
 chrome.storage.onChanged.addListener(() => {
-  if (suppressObserver) return;
   scheduleToolbarRefresh();
 });
 

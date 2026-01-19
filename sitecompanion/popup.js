@@ -401,6 +401,75 @@ function sanitizeUrl(url) {
   return "";
 }
 
+function sanitizeEmail(email) {
+  const trimmed = email.trim();
+  if (/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return "";
+}
+
+function linkifyPlainUrls(html) {
+  if (!html) return "";
+  const parts = html.split(/(<[^>]+>)/g);
+  let inAnchor = false;
+  const isOpenAnchor = (part) => /^<a\b/i.test(part);
+  const isCloseAnchor = (part) => /^<\/a\b/i.test(part);
+  const splitTrailing = (value) => {
+    let url = value;
+    let trailing = "";
+    while (/[).,!?:;\]]$/.test(url)) {
+      trailing = url.slice(-1) + trailing;
+      url = url.slice(0, -1);
+    }
+    return { url, trailing };
+  };
+  const linkifyText = (text) =>
+    text.replace(
+      /\bmailto:[^\s<>"']+|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\bhttps?:\/\/[^\s<>"']+|\b(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s<>"']*)?/gi,
+      (match) => {
+        const { url, trailing } = splitTrailing(match);
+        if (!url) return match;
+        if (/^mailto:/i.test(url)) {
+          const email = sanitizeEmail(url.slice(7));
+          if (!email) return match;
+          const href = escapeAttribute(`mailto:${email}`);
+          return `<a href="${href}" target="_blank" rel="noreferrer">mailto:${email}</a>${trailing}`;
+        }
+        if (url.includes("@") && !/^https?:\/\//i.test(url)) {
+          const email = sanitizeEmail(url);
+          if (!email) return match;
+          const href = escapeAttribute(`mailto:${email}`);
+          return `<a href="${href}" target="_blank" rel="noreferrer">${email}</a>${trailing}`;
+        }
+        if (/^https?:\/\//i.test(url)) {
+          const safeUrl = sanitizeUrl(url);
+          if (!safeUrl) return match;
+          const href = escapeAttribute(safeUrl);
+          return `<a href="${href}" target="_blank" rel="noreferrer">${url}</a>${trailing}`;
+        }
+        const withScheme = `https://${url}`;
+        const safeUrl = sanitizeUrl(withScheme);
+        if (!safeUrl) return match;
+        const href = escapeAttribute(safeUrl);
+        return `<a href="${href}" target="_blank" rel="noreferrer">${url}</a>${trailing}`;
+      }
+    );
+
+  return parts
+    .map((part) => {
+      if (!part) return part;
+      if (part.startsWith("<")) {
+        if (isOpenAnchor(part)) inAnchor = true;
+        if (isCloseAnchor(part)) inAnchor = false;
+        return part;
+      }
+      if (inAnchor) return part;
+      return linkifyText(part);
+    })
+    .join("");
+}
+
 function applyInline(text) {
   if (!text) return "";
   const codeSpans = [];
@@ -421,6 +490,7 @@ function applyInline(text) {
   output = output.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   output = output.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   output = output.replace(/_([^_]+)_/g, "<em>$1</em>");
+  output = linkifyPlainUrls(output);
 
   output = output.replace(/@@CODESPAN(\d+)@@/g, (_match, id) => {
     const code = codeSpans[Number(id)] || "";

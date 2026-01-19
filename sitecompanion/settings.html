@@ -25,12 +25,42 @@
                 <summary><a href="#global-config-panel">Global Configuration</a></summary>
                 <ul class="toc-sub">
                   <li><a href="#appearance-panel">Appearance</a></li>
-                  <li><a href="#api-keys-panel">API Keys</a></li>
-                  <li><a href="#api-panel">API</a></li>
-                  <li><a href="#environment-panel">Environments</a></li>
-                  <li><a href="#profiles-panel">Profiles</a></li>
-                  <li><a href="#tasks-panel">Tasks</a></li>
-                  <li><a href="#shortcuts-panel">Toolbar Shortcuts</a></li>
+                  <li>
+                    <details class="toc-group toc-global-section" data-state-key="toc:global:api-keys">
+                      <summary><a href="#api-keys-panel">API Keys</a></summary>
+                      <ul class="toc-sub toc-cards" id="toc-global-api-keys-list"></ul>
+                    </details>
+                  </li>
+                  <li>
+                    <details class="toc-group toc-global-section" data-state-key="toc:global:api-configs">
+                      <summary><a href="#api-panel">API</a></summary>
+                      <ul class="toc-sub toc-cards" id="toc-global-api-configs-list"></ul>
+                    </details>
+                  </li>
+                  <li>
+                    <details class="toc-group toc-global-section" data-state-key="toc:global:envs">
+                      <summary><a href="#environment-panel">Environments</a></summary>
+                      <ul class="toc-sub toc-cards" id="toc-global-envs-list"></ul>
+                    </details>
+                  </li>
+                  <li>
+                    <details class="toc-group toc-global-section" data-state-key="toc:global:profiles">
+                      <summary><a href="#profiles-panel">Profiles</a></summary>
+                      <ul class="toc-sub toc-cards" id="toc-global-profiles-list"></ul>
+                    </details>
+                  </li>
+                  <li>
+                    <details class="toc-group toc-global-section" data-state-key="toc:global:tasks">
+                      <summary><a href="#tasks-panel">Tasks</a></summary>
+                      <ul class="toc-sub toc-cards" id="toc-global-tasks-list"></ul>
+                    </details>
+                  </li>
+                  <li>
+                    <details class="toc-group toc-global-section" data-state-key="toc:global:shortcuts">
+                      <summary><a href="#shortcuts-panel">Toolbar Shortcuts</a></summary>
+                      <ul class="toc-sub toc-cards" id="toc-global-shortcuts-list"></ul>
+                    </details>
+                  </li>
                   <li><a href="#global-sites-panel">Sites</a></li>
                 </ul>
               </details>
@@ -54,44 +84,58 @@
       <main class="settings-main">
     <details class="panel" id="global-config-panel" open>
       <summary class="panel-summary">
-        <h2>Global Configuration</h2>
+        <div class="panel-summary-row">
+          <div class="panel-summary-left">
+            <h2>Global Configuration</h2>
+          </div>
+          <div class="panel-summary-right"></div>
+        </div>
       </summary>
       <div class="panel-body">
         <!-- Appearance -->
         <details class="panel sub-panel" id="appearance-panel">
           <summary class="panel-summary">
-            <h2>Appearance</h2>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <h2>Appearance</h2>
+              </div>
+              <div class="panel-summary-right"></div>
+            </div>
           </summary>
           <div class="panel-body">
-            <div class="field">
-              <label for="themeSelect">Theme</label>
-              <select id="themeSelect">
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
+            <div class="inline-fields two appearance-fields">
+              <div class="field">
+                <label for="themeSelect">Theme</label>
+                <select id="themeSelect">
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="toolbarPositionSelect">Toolbar Position</label>
+                <select id="toolbarPositionSelect">
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="top-left">Top Left</option>
+                  <option value="bottom-center">Bottom Center</option>
+                </select>
+              </div>
             </div>
-            <div class="field">
-              <label for="toolbarPositionSelect">Toolbar Position</label>
-              <select id="toolbarPositionSelect">
-                <option value="bottom-right">Bottom Right</option>
-                <option value="bottom-left">Bottom Left</option>
-                <option value="top-right">Top Right</option>
-                <option value="top-left">Top Left</option>
-                <option value="bottom-center">Bottom Center</option>
-              </select>
-            </div>
-            <div class="field">
-              <label class="toggle-label">
-                <input id="toolbarAutoHide" type="checkbox" />
-                Auto-hide toolbar on unknown sites
-              </label>
-            </div>
-            <div class="field">
-              <label class="toggle-label">
-                <input id="alwaysShowOutput" type="checkbox" />
-                Always show output buffer in popup UI
-              </label>
+            <div class="inline-fields two appearance-toggles">
+              <div class="field">
+                <label class="toggle-label">
+                  <input id="toolbarAutoHide" type="checkbox" />
+                  Auto-hide toolbar on unknown sites
+                </label>
+              </div>
+              <div class="field">
+                <label class="toggle-label">
+                  <input id="alwaysShowOutput" type="checkbox" />
+                  Always show output buffer in popup UI
+                </label>
+              </div>
             </div>
           </div>
         </details>
@@ -99,13 +143,16 @@
         <!-- API Keys -->
         <details class="panel sub-panel" id="api-keys-panel">
           <summary class="panel-summary">
-            <h2>API KEYS</h2>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <h2>API KEYS</h2>
+              </div>
+              <div class="panel-summary-right">
+                <button id="addApiKeyBtn" class="accent" type="button">Add</button>
+              </div>
+            </div>
           </summary>
           <div class="panel-body">
-            <div class="row">
-              <div></div>
-              <button id="addApiKeyBtn" class="ghost" type="button">Add Key</button>
-            </div>
             <div id="apiKeys" class="api-keys"></div>
           </div>
         </details>
@@ -113,15 +160,16 @@
         <!-- API -->
         <details class="panel sub-panel" id="api-panel">
           <summary class="panel-summary">
-            <h2>API</h2>
-          </summary>
-          <div class="panel-body">
-            <div class="row">
-              <div></div>
-              <div class="row-actions">
-                <button id="addApiConfigBtn" class="ghost" type="button">Add Config</button>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <h2>API</h2>
+              </div>
+              <div class="panel-summary-right">
+                <button id="addApiConfigBtn" class="accent" type="button">Add</button>
               </div>
             </div>
+          </summary>
+          <div class="panel-body">
             <div id="apiConfigs" class="api-configs"></div>
           </div>
         </details>
@@ -129,16 +177,19 @@
         <!-- Envs -->
         <details class="panel sub-panel" id="environment-panel">
           <summary class="panel-summary">
-            <div class="row-title">
-              <h2>ENVIRONMENTS</h2>
-              <span class="hint hint-accent">Baseline environments</span>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <div class="row-title">
+                  <h2>ENVIRONMENTS</h2>
+                  <span class="hint hint-accent">Baseline environments</span>
+                </div>
+              </div>
+              <div class="panel-summary-right">
+                <button id="addEnvConfigBtn" class="accent" type="button">Add</button>
+              </div>
             </div>
           </summary>
           <div class="panel-body">
-            <div class="row">
-              <div></div>
-              <button id="addEnvConfigBtn" class="ghost" type="button">Add Env</button>
-            </div>
             <div id="envConfigs" class="env-configs"></div>
           </div>
         </details>
@@ -146,16 +197,19 @@
         <!-- Profiles -->
         <details class="panel sub-panel" id="profiles-panel">
           <summary class="panel-summary">
-            <div class="row-title">
-              <h2>PROFILES</h2>
-              <span class="hint hint-accent">Baseline user contexts</span>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <div class="row-title">
+                  <h2>PROFILES</h2>
+                  <span class="hint hint-accent">Baseline user contexts</span>
+                </div>
+              </div>
+              <div class="panel-summary-right">
+                <button id="addProfileBtn" class="accent" type="button">Add</button>
+              </div>
             </div>
           </summary>
           <div class="panel-body">
-            <div class="row">
-              <div></div>
-              <button id="addProfileBtn" class="ghost" type="button">Add Profile</button>
-            </div>
             <div id="profiles" class="profiles"></div>
           </div>
         </details>
@@ -163,16 +217,19 @@
         <!-- Tasks -->
         <details class="panel sub-panel" id="tasks-panel">
           <summary class="panel-summary">
-            <div class="row-title">
-              <h2>TASKS</h2>
-              <span class="hint hint-accent">Baseline execution units</span>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <div class="row-title">
+                  <h2>TASKS</h2>
+                  <span class="hint hint-accent">Baseline execution units</span>
+                </div>
+              </div>
+              <div class="panel-summary-right">
+                <button id="addTaskBtn" class="accent" type="button">Add</button>
+              </div>
             </div>
           </summary>
           <div class="panel-body">
-            <div class="row">
-              <div></div>
-              <button id="addTaskBtn" class="ghost" type="button">Add Task</button>
-            </div>
             <div id="tasks" class="tasks"></div>
           </div>
         </details>
@@ -180,16 +237,19 @@
         <!-- Toolbar Shortcuts -->
         <details class="panel sub-panel" id="shortcuts-panel">
           <summary class="panel-summary">
-            <div class="row-title">
-              <h2>TOOLBAR SHORTCUTS</h2>
-              <span class="hint hint-accent">One-click toolbar runs</span>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <div class="row-title">
+                  <h2>TOOLBAR SHORTCUTS</h2>
+                  <span class="hint hint-accent">One-click toolbar runs</span>
+                </div>
+              </div>
+              <div class="panel-summary-right">
+                <button id="addShortcutBtn" class="accent" type="button">Add</button>
+              </div>
             </div>
           </summary>
           <div class="panel-body">
-            <div class="row">
-              <div></div>
-              <button id="addShortcutBtn" class="ghost" type="button">Add Shortcut</button>
-            </div>
             <div id="shortcuts" class="shortcuts"></div>
           </div>
         </details>
@@ -197,9 +257,14 @@
         <!-- Sites -->
         <details class="panel sub-panel" id="global-sites-panel">
           <summary class="panel-summary">
-            <div class="row-title">
-              <h2>SITES</h2>
-              <span class="hint hint-accent">Inherit directly from global</span>
+            <div class="panel-summary-row">
+              <div class="panel-summary-left">
+                <div class="row-title">
+                  <h2>SITES</h2>
+                  <span class="hint hint-accent">Inherit directly from global</span>
+                </div>
+              </div>
+              <div class="panel-summary-right"></div>
             </div>
           </summary>
           <div class="panel-body">
@@ -211,32 +276,38 @@
 
     <details class="panel" id="workspaces-panel">
       <summary class="panel-summary">
-        <div class="row-title">
-          <h2>Workspaces</h2>
-          <span class="hint hint-accent">Namespace for sites and resources</span>
+        <div class="panel-summary-row">
+          <div class="panel-summary-left">
+            <div class="row-title">
+              <h2>Workspaces</h2>
+              <span class="hint hint-accent">Namespace for sites and resources</span>
+            </div>
+          </div>
+          <div class="panel-summary-right">
+            <button id="addWorkspaceBtn" class="accent" type="button">Add</button>
+          </div>
         </div>
       </summary>
       <div class="panel-body">
-        <div class="row">
-          <div></div>
-          <button id="addWorkspaceBtn" class="ghost" type="button">Add Workspace</button>
-        </div>
         <div id="workspaces" class="workspaces"></div>
       </div>
     </details>
 
     <details class="panel" id="sites-panel">
       <summary class="panel-summary">
-        <div class="row-title">
-          <h2>Sites</h2>
-          <span class="hint hint-accent">Configure known sites</span>
+        <div class="panel-summary-row">
+          <div class="panel-summary-left">
+            <div class="row-title">
+              <h2>Sites</h2>
+              <span class="hint hint-accent">Configure known sites</span>
+            </div>
+          </div>
+          <div class="panel-summary-right">
+            <button id="addSiteBtn" class="accent" type="button">Add</button>
+          </div>
         </div>
       </summary>
       <div class="panel-body">
-        <div class="row">
-          <div></div>
-          <button id="addSiteBtn" class="ghost" type="button">Add Site</button>
-        </div>
         <div id="sites" class="sites"></div>
       </div>
     </details>

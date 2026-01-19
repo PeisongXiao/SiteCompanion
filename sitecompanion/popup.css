@@ -287,14 +287,14 @@ button:active {
   padding: 8px;
   background: var(--output-bg);
   min-height: 210px;
-  max-height: 360px;
+  max-height: 280px;
   overflow: hidden;
 }
 
 .output-body {
   margin: 0;
   word-break: break-word;
-  max-height: 340px;
+  max-height: 260px;
   overflow-y: auto;
   font-size: 11px;
   line-height: 1.45;

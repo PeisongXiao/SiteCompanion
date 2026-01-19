@@ -46,6 +46,7 @@ function openKeepalive(tabId) {
   try {
     keepalivePort = chrome.tabs.connect(tabId, { name: "sitecompanion-keepalive" });
     keepalivePort.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
       keepalivePort = null;
     });
   } catch {

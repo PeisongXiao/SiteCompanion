@@ -221,7 +221,7 @@ body.custom-task-mode.always-default-env-profile .selector-row {
   background: var(--input-bg);
   color: var(--input-fg);
   font-size: 12px;
-  resize: vertical;
+  resize: none;
   min-height: 52px;
 }
 

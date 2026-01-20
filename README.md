@@ -4,6 +4,39 @@ pipelines on the visible text of any site.
 
 > SiteCompanion saves you from copying and pasting to run AI on sites.
 
+## Table of Contents
+
+- [SiteCompanion](#sitecompanion)
+  - [Setup](#setup)
+  - [Execution](#execution)
+    - [Model](#model)
+    - [Prompt Building](#prompt-building)
+    - [Extension Popup](#extension-popup)
+      - [Configuration - Pasting Mode](#configuration---pasting-mode)
+      - [Configuration - Confirmation Mode](#configuration---confirmation-mode)
+      - [Normal Mode](#normal-mode)
+      - [Custom Mode](#custom-mode)
+    - [Toolbar](#toolbar)
+  - [Configurations and Terms](#configurations-and-terms)
+    - [Scope and Workspaces](#scope-and-workspaces)
+    - [Configuration Inheritance](#configuration-inheritance)
+      - [Disabling Inherited Configurations](#disabling-inherited-configurations)
+    - [Appearance](#appearance)
+      - [Global-Only Appearance Configurations](#global-only-appearance-configurations)
+    - [API Keys (Global Only)](#api-keys-global-only)
+    - [API Configurations](#api-configurations)
+      - [Advanced Mode](#advanced-mode)
+    - [Environments](#environments)
+    - [Profiles](#profiles)
+    - [Tasks](#tasks)
+      - [Task Defaults](#task-defaults)
+    - [Toolbar Shortcuts](#toolbar-shortcuts)
+    - [Site-Specific Configurations](#site-specific-configurations)
+      - [Selector Patterns](#selector-patterns)
+  - [Planned Features](#planned-features)
+  - [Known Bugs](#known-bugs)
+  - [Disclaimer](#disclaimer)
+
 ## Setup
 1. Download the code (will be published to the Chrome Store soon) and
    load the extension code (`sitecompanion/`) as an unpacked
@@ -46,15 +79,19 @@ This is the mode the popup UI is in when on an unknown site.
 You can choose to try extracting the minimal enclosing class that
 contains the pasted text or the full text of the body of the current
 site. Choosing either will proceed to [Confirmation
-Mode](#configuration-confirmation-mode).
+Mode](#configuration---confirmation-mode).
 
 #### Configuration - Confirmation Mode
 This is the mode to review the extracted text based on your current
 site's contents and confirm the configuration of the current site
 including the name, URL match pattern and the workspace it belongs to.
 
-Confirming will add the current site to the list of known sites and
-enter [Normal Mode](#normal-mode).
+This mode has the following buttons:
+1. "Retry" button: goes back to [Pasting
+   Mode](#configuration---pasting-mode) without saving any
+   configuration.
+2. "Confirm" button: add the current site to the list of known sites
+   and enter [Normal Mode](#normal-mode).
 
 See [Site-Specific Configurations](#site-specific-configurations) for
 configuration details.
@@ -63,7 +100,7 @@ configuration details.
 This is the mode where most of the actions happen.
 
 The knobs for running a task:
-- Environment: the environment in which the task is running.
+- Environment: the environment which used by the task.
 - Profile: the user profile used by the task.
 - Task: the task to run.
 - "Custom" button: enters [Custom Mode](#custom-mode).
@@ -170,7 +207,7 @@ In "Advanced Mode", you may directly edit the API endpoint URL and the
    
 ### Environments
 Environments are bundles of API configuration and a system prompt.
-They define the environment in which the task is running.
+They define the environment in which a task is running.
 
 An environment contains the following components:
 1. API configuration: select the API configuration to use for this
@@ -199,7 +236,7 @@ Each shortcut is a combination of environment + profile + task.
 ### Site-Specific Configurations
 Some configurations are site-specific. They are there to configure how
 `SiteCompanion` recognizes a site, the workspace the site belongs to,
-and how it extracts text from it.
+and how it extracts text.
 
 The additional configuration options are:
 1. URL Pattern: the globbing pattern to match URLs against for that

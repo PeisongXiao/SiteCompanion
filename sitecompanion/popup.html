@@ -20,8 +20,8 @@
         <textarea id="partialTextPaste" rows="4" placeholder="Paste some text here..."></textarea>
         <div id="minimalExtractStatus" class="helper-text hidden"></div>
         <div class="row">
-          <button id="extractMinimalBtn" class="accent">Try Extracting Minimal</button>
-          <button id="extractFullBtn" class="ghost">Extract Full Text</button>
+          <button id="extractMinimalBtn" class="accent control-btn">Try Extracting Minimal</button>
+          <button id="extractFullBtn" class="ghost control-btn">Extract Full Text</button>
         </div>
       </div>
     </section>
@@ -43,8 +43,8 @@
           <select id="workspaceSelect"></select>
         </div>
         <div class="row">
-          <button id="retryExtractBtn" class="ghost">Retry</button>
-          <button id="confirmSiteBtn" class="accent">Confirm</button>
+          <button id="retryExtractBtn" class="ghost control-btn">Retry</button>
+          <button id="confirmSiteBtn" class="accent control-btn">Confirm</button>
         </div>
       </div>
     </section>
@@ -65,19 +65,45 @@
               <select id="profileSelect"></select>
             </div>
           </div>
-          <div class="task-row">
+          <div class="env-profile-summary" id="envProfileSummary">
+            <div class="env-profile-item">
+              ENV: <span id="envSummaryValue"></span>
+            </div>
+            <div class="env-profile-item">
+              PROFILE: <span id="profileSummaryValue"></span>
+            </div>
+          </div>
+          <div class="task-row" id="normalTaskRow">
             <div class="field inline-field task-field">
               <label for="taskSelect">Task</label>
               <select id="taskSelect"></select>
             </div>
-            <button id="runBtn" class="accent">Run</button>
-            <button id="abortBtn" class="ghost stop-btn hidden" disabled>Stop</button>
+            <button id="customTaskBtn" class="ghost control-btn">Custom</button>
+            <div id="taskActions">
+              <button id="runBtn" class="accent control-btn">Run</button>
+              <button
+                id="abortBtn"
+                class="ghost stop-btn hidden control-btn"
+                disabled
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+          <div class="task-row custom-task-row hidden" id="customTaskRow">
+            <div class="field custom-task-field">
+              <textarea id="customTaskInput" rows="2" placeholder="Enter temporary custom task..."></textarea>
+            </div>
+            <div class="custom-task-actions">
+              <button id="normalTaskBtn" class="ghost control-btn">Normal</button>
+              <div id="taskActionsSlot"></div>
+            </div>
           </div>
         </div>
       </div>
       <div class="meta">
         <span id="postingCount">Site Text: 0 chars</span>
-        <span id="promptCount">Task: 0 chars</span>
+        <span id="promptCount">Total: 0 chars</span>
         <span id="status" class="status">Idle</span>
       </div>
     </section>
@@ -88,9 +114,15 @@
 
     <footer class="footer">
       <div class="footer-left">
-        <button id="copyRenderedBtn" class="ghost" type="button">Copy</button>
-        <button id="copyRawBtn" class="ghost" type="button">Copy Markdown</button>
-        <button id="clearOutputBtn" class="ghost" type="button">Clear</button>
+        <button id="copyRenderedBtn" class="ghost control-btn" type="button">
+          Copy
+        </button>
+        <button id="copyRawBtn" class="ghost control-btn" type="button">
+          Copy Markdown
+        </button>
+        <button id="clearOutputBtn" class="ghost control-btn" type="button">
+          Clear
+        </button>
       </div>
       <button id="settingsBtn" class="link">Settings</button>
     </footer>

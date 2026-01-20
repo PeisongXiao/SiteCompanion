@@ -360,6 +360,22 @@ function resolveThemeValue(globalTheme, workspace, site) {
   return globalTheme || "system";
 }
 
+function normalizeEmptyToolbarBehavior(value, allowInherit = true) {
+  if (value === "hide" || value === "open") return value;
+  if (allowInherit && value === "inherit") return "inherit";
+  return allowInherit ? "inherit" : "open";
+}
+
+function resolveEmptyToolbarBehavior(globalValue, workspace, site) {
+  const base = normalizeEmptyToolbarBehavior(globalValue, false);
+  const workspaceValue = normalizeEmptyToolbarBehavior(
+    workspace?.emptyToolbarBehavior
+  );
+  const workspaceResolved = workspaceValue === "inherit" ? base : workspaceValue;
+  const siteValue = normalizeEmptyToolbarBehavior(site?.emptyToolbarBehavior);
+  return siteValue === "inherit" ? workspaceResolved : siteValue;
+}
+
 function resolveThemeMode(theme) {
   if (theme === "dark" || theme === "light") return theme;
   if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
@@ -393,9 +409,19 @@ function getToolbarThemeTokens(mode) {
   };
 }
 
-function createToolbar(shortcuts, position = "bottom-right", themeMode = "light", options = {}) {
+function createToolbar(
+  shortcuts,
+  position = "bottom-right",
+  themeMode = "light",
+  options = {}
+) {
   let toolbar = document.getElementById("sitecompanion-toolbar");
   if (toolbar) toolbar.remove();
+
+  const hasShortcuts = Array.isArray(shortcuts) && shortcuts.length > 0;
+  const showOpenButton =
+    options?.unknown || (!hasShortcuts && options?.emptyBehavior === "open");
+  if (!hasShortcuts && !showOpenButton) return;
 
   toolbar = document.createElement("div");
   toolbar.id = "sitecompanion-toolbar";
@@ -437,7 +463,7 @@ function createToolbar(shortcuts, position = "bottom-right", themeMode = "light"
     color: ${tokens.ink};
   `;
 
-  if (options?.unknown) {
+  if (showOpenButton) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = "Open SiteCompanion";
@@ -457,12 +483,6 @@ function createToolbar(shortcuts, position = "bottom-right", themeMode = "light"
       });
     });
     toolbar.appendChild(btn);
-  } else if (!shortcuts || !shortcuts.length) {
-    const label = document.createElement("span");
-    label.textContent = "SiteCompanion";
-    label.style.fontSize = "12px";
-    label.style.color = tokens.muted;
-    toolbar.appendChild(label);
   } else {
     for (const shortcut of shortcuts) {
       const btn = document.createElement("button");
@@ -527,7 +547,8 @@ async function refreshToolbar() {
       presets = [],
       toolbarPosition = "bottom-right",
       theme = "system",
-      toolbarAutoHide = true
+      toolbarAutoHide = true,
+      emptyToolbarBehavior = "open"
     } = await chrome.storage.local.get([
       "sites",
       "workspaces",
@@ -535,7 +556,8 @@ async function refreshToolbar() {
       "presets",
       "toolbarPosition",
       "theme",
-      "toolbarAutoHide"
+      "toolbarAutoHide",
+      "emptyToolbarBehavior"
     ]);
     const currentUrl = window.location.href;
     const site = sites.find(s => matchUrl(currentUrl, s.urlPattern));
@@ -579,7 +601,19 @@ async function refreshToolbar() {
           : toolbarPosition;
     const resolvedTheme = resolveThemeValue(theme, workspace, site);
     const themeMode = resolveThemeMode(resolvedTheme);
-    createToolbar(siteShortcuts, resolvedPosition, themeMode);
+    const resolvedEmptyToolbarBehavior = resolveEmptyToolbarBehavior(
+      emptyToolbarBehavior,
+      workspace,
+      site
+    );
+    if (!siteShortcuts.length && resolvedEmptyToolbarBehavior === "hide") {
+      const toolbar = document.getElementById("sitecompanion-toolbar");
+      if (toolbar) toolbar.remove();
+      return;
+    }
+    createToolbar(siteShortcuts, resolvedPosition, themeMode, {
+      emptyBehavior: resolvedEmptyToolbarBehavior
+    });
   } catch (error) {
     const message = String(error?.message || "");
     if (message.includes("Extension context invalidated")) {
@@ -596,6 +630,7 @@ async function refreshToolbar() {
 
 
 let refreshTimer = null;
+let contentChangeTimer = null;
 function scheduleToolbarRefresh() {
   if (refreshTimer) return;
   refreshTimer = window.setTimeout(() => {
@@ -610,9 +645,22 @@ function scheduleToolbarRefresh() {
   }, 200);
 }
 
+function scheduleContentChangeNotice() {
+  if (contentChangeTimer) return;
+  contentChangeTimer = window.setTimeout(() => {
+    contentChangeTimer = null;
+    chrome.runtime.sendMessage({ type: "SITE_CONTENT_CHANGED" }, () => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
+    });
+  }, 250);
+}
+
 const observer = new MutationObserver(() => {
   if (suppressObserver) return;
   scheduleToolbarRefresh();
+  scheduleContentChangeNotice();
 });
 
 observer.observe(document.documentElement, { childList: true, subtree: true });

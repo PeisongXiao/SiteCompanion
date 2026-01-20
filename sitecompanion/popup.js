@@ -3,6 +3,16 @@ const abortBtn = document.getElementById("abortBtn");
 const taskSelect = document.getElementById("taskSelect");
 const envSelect = document.getElementById("envSelect");
 const profileSelect = document.getElementById("profileSelect");
+const envProfileSummary = document.getElementById("envProfileSummary");
+const envSummaryValue = document.getElementById("envSummaryValue");
+const profileSummaryValue = document.getElementById("profileSummaryValue");
+const customTaskBtn = document.getElementById("customTaskBtn");
+const normalTaskBtn = document.getElementById("normalTaskBtn");
+const customTaskInput = document.getElementById("customTaskInput");
+const normalTaskRow = document.getElementById("normalTaskRow");
+const customTaskRow = document.getElementById("customTaskRow");
+const taskActions = document.getElementById("taskActions");
+const taskActionsSlot = document.getElementById("taskActionsSlot");
 const outputEl = document.getElementById("output");
 const statusEl = document.getElementById("status");
 const postingCountEl = document.getElementById("postingCount");
@@ -12,6 +22,8 @@ const copyRenderedBtn = document.getElementById("copyRenderedBtn");
 const copyRawBtn = document.getElementById("copyRawBtn");
 const clearOutputBtn = document.getElementById("clearOutputBtn");
 const outputSection = document.querySelector(".output");
+const footerLeft = document.querySelector(".footer-left");
+const footer = document.querySelector(".footer");
 
 const OUTPUT_STORAGE_KEY = "lastOutput";
 const AUTO_RUN_KEY = "autoRunDefaultTask";
@@ -20,6 +32,8 @@ const LAST_TASK_KEY = "lastSelectedTaskId";
 const LAST_ENV_KEY = "lastSelectedEnvId";
 const LAST_PROFILE_KEY = "lastSelectedProfileId";
 const POPUP_DRAFT_KEY = "popupDraft";
+const CUSTOM_TASK_MODE_KEY = "customTaskMode";
+const CUSTOM_TASK_TEXT_KEY = "customTaskText";
 
 const unknownSiteState = document.getElementById("unknownSiteState");
 const extractionReviewState = document.getElementById("extractionReviewState");
@@ -57,7 +71,12 @@ const state = {
   selectedTaskId: "",
   selectedEnvId: "",
   selectedProfileId: "",
-  alwaysShowOutput: false
+  alwaysShowOutput: false,
+  alwaysUseDefaultEnvProfile: false,
+  activeTabId: null,
+  pendingConfigRefresh: false,
+  customTaskMode: false,
+  customTaskText: ""
 };
 
 async function switchState(stateName) {
@@ -118,6 +137,7 @@ function applyPopupDraft(draft) {
   } else if (typeof draft.siteTextSelector === "string") {
     state.siteTextTarget = { kind: "css", selector: draft.siteTextSelector };
   }
+  updateCounts();
 }
 
 function matchUrl(url, pattern) {
@@ -668,6 +688,46 @@ function resolveThemeForPopup(baseTheme) {
   return baseTheme || "system";
 }
 
+function resolveAppearanceToggleValue(value, fallback) {
+  if (value === "enabled") return true;
+  if (value === "disabled") return false;
+  if (value === "inherit" || value === null || value === undefined) {
+    return Boolean(fallback);
+  }
+  if (typeof value === "boolean") return value;
+  return Boolean(fallback);
+}
+
+function resolveAlwaysUseDefaultEnvProfile(baseSetting, workspace, site) {
+  const resolvedBase = resolveAppearanceToggleValue(baseSetting, false);
+  const workspaceResolved = resolveAppearanceToggleValue(
+    workspace?.alwaysUseDefaultEnvProfile,
+    resolvedBase
+  );
+  return resolveAppearanceToggleValue(
+    site?.alwaysUseDefaultEnvProfile,
+    workspaceResolved
+  );
+}
+
+function updateEnvProfileSummary() {
+  if (!envSummaryValue || !profileSummaryValue) return;
+  const env = getSelectedEnv();
+  const profile = getSelectedProfile();
+  envSummaryValue.textContent = env ? env.name || "Default" : "None";
+  profileSummaryValue.textContent = profile ? profile.name || "Default" : "None";
+}
+
+function applyAlwaysUseDefaultEnvProfileState() {
+  document.body.classList.toggle(
+    "always-default-env-profile",
+    state.alwaysUseDefaultEnvProfile
+  );
+  updateEnvSelectState();
+  updateProfileSelectState();
+  updateEnvProfileSummary();
+}
+
 function setAnalyzing(isAnalyzing) {
   state.isAnalyzing = isAnalyzing;
   runBtn.disabled = isAnalyzing;
@@ -677,6 +737,10 @@ function setAnalyzing(isAnalyzing) {
   updateTaskSelectState();
   updateEnvSelectState();
   updateProfileSelectState();
+  if (!isAnalyzing && state.pendingConfigRefresh) {
+    state.pendingConfigRefresh = false;
+    scheduleConfigRefresh();
+  }
 }
 
 function updateOutputVisibility() {
@@ -684,14 +748,175 @@ function updateOutputVisibility() {
   const shouldHide =
     state.currentPopupState !== "normal" && !state.alwaysShowOutput;
   outputSection.classList.toggle("hidden", shouldHide);
+  footerLeft?.classList.toggle("hidden", shouldHide);
+  footer?.classList.toggle("compact", shouldHide);
+}
+
+async function persistCustomTaskState() {
+  await chrome.storage.local.set({
+    [CUSTOM_TASK_MODE_KEY]: state.customTaskMode,
+    [CUSTOM_TASK_TEXT_KEY]: state.customTaskText
+  });
+}
+
+function setCustomTaskMode(enabled, { persist = true } = {}) {
+  state.customTaskMode = Boolean(enabled);
+  document.body.classList.toggle("custom-task-mode", state.customTaskMode);
+  if (state.customTaskMode) {
+    if (normalTaskRow) {
+      const measured = measureRowHeight(normalTaskRow);
+      if (measured) normalTaskRowHeight = measured;
+      normalTaskRow.classList.add("hidden");
+    }
+    customTaskRow?.classList.remove("hidden");
+    if (taskActionsSlot && taskActions) {
+      taskActionsSlot.appendChild(taskActions);
+    }
+    if (customTaskInput) {
+      customTaskInput.value = state.customTaskText || "";
+      customTaskInput.focus();
+    }
+    window.requestAnimationFrame(() => {
+      if (customTaskRow) {
+        const measured = measureRowHeight(customTaskRow);
+        if (measured) customTaskRowHeight = measured;
+      }
+      updateOutputHeightDelta();
+    });
+  } else {
+    customTaskRow?.classList.add("hidden");
+    if (normalTaskRow) {
+      normalTaskRow.classList.remove("hidden");
+    }
+    if (normalTaskRow && taskActions) {
+      normalTaskRow.appendChild(taskActions);
+    }
+    window.requestAnimationFrame(() => {
+      if (normalTaskRow) {
+        const measured = measureRowHeight(normalTaskRow);
+        if (measured) normalTaskRowHeight = measured;
+      }
+      updateOutputHeightDelta();
+    });
+  }
+  updatePromptCount();
+  updateEnvSelectState();
+  updateProfileSelectState();
+  if (persist) {
+    void persistCustomTaskState();
+  }
+}
+
+function getSelectedTask() {
+  if (state.forcedTask) return state.forcedTask;
+  const selectedId = taskSelect?.value || state.selectedTaskId;
+  return state.tasks.find((item) => item.id === selectedId) || state.tasks[0] || null;
+}
+
+function getSelectedProfile() {
+  const selectedId = profileSelect?.value || state.selectedProfileId;
+  return (
+    state.profiles.find((item) => item.id === selectedId) ||
+    state.profiles[0] ||
+    null
+  );
+}
+
+function getSelectedEnv() {
+  const selectedId = envSelect?.value || state.selectedEnvId;
+  return state.envs.find((item) => item.id === selectedId) || state.envs[0] || null;
+}
+
+function buildTotalPromptText() {
+  const task = getSelectedTask();
+  const profile = getSelectedProfile();
+  const env = getSelectedEnv();
+  const systemPrompt = env?.systemPrompt || "";
+  const customText = (state.customTaskText || "").trim();
+  const taskText =
+    state.customTaskMode && !state.forcedTask ? customText : task?.text || "";
+  const userPrompt = buildUserMessage(
+    profile?.text || "",
+    taskText,
+    state.siteText || ""
+  );
+  return systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
 }
 
 function updateSiteTextCount() {
-  postingCountEl.textContent = `Site Text: ${state.siteText.length} chars`;
+  const length = (state.siteText || "").length;
+  postingCountEl.textContent = `Site Text: ${length} chars`;
 }
 
 function updatePromptCount(count) {
-  promptCountEl.textContent = `Task: ${count} chars`;
+  const total =
+    typeof count === "number" ? count : buildTotalPromptText().length;
+  promptCountEl.textContent = `Total: ${total} chars`;
+}
+
+function updateCounts() {
+  updateSiteTextCount();
+  updatePromptCount();
+}
+
+let siteContentRefreshTimer = null;
+function scheduleSiteContentRefresh() {
+  if (siteContentRefreshTimer) return;
+  siteContentRefreshTimer = window.setTimeout(() => {
+    siteContentRefreshTimer = null;
+    void refreshSiteContentCounts();
+  }, 250);
+}
+
+let configRefreshTimer = null;
+function scheduleConfigRefresh() {
+  if (state.isAnalyzing) {
+    state.pendingConfigRefresh = true;
+    return;
+  }
+  if (configRefreshTimer) return;
+  configRefreshTimer = window.setTimeout(() => {
+    configRefreshTimer = null;
+    void loadConfig();
+  }, 250);
+}
+
+let normalTaskRowHeight = null;
+let customTaskRowHeight = null;
+
+function measureRowHeight(row) {
+  if (!row) return 0;
+  return row.getBoundingClientRect().height || 0;
+}
+
+function updateOutputHeightDelta() {
+  const baseHeight = normalTaskRowHeight || measureRowHeight(normalTaskRow);
+  if (!baseHeight) return;
+  if (!state.customTaskMode) {
+    document.body.style.setProperty("--output-height-delta", "0px");
+    return;
+  }
+  const customHeight = customTaskRowHeight || measureRowHeight(customTaskRow);
+  const delta = Math.max(0, customHeight - baseHeight);
+  document.body.style.setProperty("--output-height-delta", `${Math.round(delta)}px`);
+}
+
+async function refreshSiteContentCounts() {
+  if (state.isAnalyzing) return;
+  if (state.currentPopupState !== "normal") return;
+  if (!state.siteTextTarget) return;
+  try {
+    const response = await sendToActiveTab({
+      type: "EXTRACT_BY_SELECTOR",
+      target: state.siteTextTarget
+    });
+    if (!response?.ok) return;
+    state.siteText = response.extracted || "";
+    state.siteTextTarget = response.target || state.siteTextTarget;
+    updateCounts();
+  } catch {
+    // Ignore refresh failures; counts will update on next explicit extract.
+  }
 }
 
 function renderTasks(tasks) {
@@ -726,6 +951,7 @@ function renderEnvironments(envs) {
     option.value = "";
     envSelect.appendChild(option);
     updateEnvSelectState();
+    updateEnvProfileSummary();
     return;
   }
 
@@ -736,6 +962,7 @@ function renderEnvironments(envs) {
     envSelect.appendChild(option);
   }
   updateEnvSelectState();
+  updateEnvProfileSummary();
 }
 
 function updateTaskSelectState() {
@@ -745,7 +972,10 @@ function updateTaskSelectState() {
 
 function updateEnvSelectState() {
   const hasEnvs = state.envs.length > 0;
-  envSelect.disabled = state.isAnalyzing || !hasEnvs;
+  envSelect.disabled =
+    state.isAnalyzing ||
+    !hasEnvs ||
+    (state.alwaysUseDefaultEnvProfile && !state.customTaskMode);
 }
 
 function renderProfiles(profiles) {
@@ -758,6 +988,7 @@ function renderProfiles(profiles) {
     option.value = "";
     profileSelect.appendChild(option);
     updateProfileSelectState();
+    updateEnvProfileSummary();
     return;
   }
 
@@ -768,11 +999,15 @@ function renderProfiles(profiles) {
     profileSelect.appendChild(option);
   }
   updateProfileSelectState();
+  updateEnvProfileSummary();
 }
 
 function updateProfileSelectState() {
   const hasProfiles = state.profiles.length > 0;
-  profileSelect.disabled = state.isAnalyzing || !hasProfiles;
+  profileSelect.disabled =
+    state.isAnalyzing ||
+    !hasProfiles ||
+    (state.alwaysUseDefaultEnvProfile && !state.customTaskMode);
 }
 
 function getTaskDefaultEnvId(task) {
@@ -792,6 +1027,8 @@ function setEnvironmentSelection(envId) {
     envSelect.value = target;
   }
   state.selectedEnvId = target;
+  updatePromptCount();
+  updateEnvProfileSummary();
 }
 
 function setProfileSelection(profileId) {
@@ -803,6 +1040,8 @@ function setProfileSelection(profileId) {
     profileSelect.value = target;
   }
   state.selectedProfileId = target;
+  updatePromptCount();
+  updateEnvProfileSummary();
 }
 
 function selectTask(taskId, { resetEnv } = { resetEnv: false }) {
@@ -814,6 +1053,7 @@ function selectTask(taskId, { resetEnv } = { resetEnv: false }) {
     setEnvironmentSelection(getTaskDefaultEnvId(task));
     setProfileSelection(getTaskDefaultProfileId(task));
   }
+  updatePromptCount();
 }
 
 async function persistSelections() {
@@ -900,6 +1140,7 @@ function ensurePort() {
 async function loadConfig() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const currentUrl = tabs[0]?.url || "";
+  state.activeTabId = tabs[0]?.id || null;
   
   const { lastPopupState, [POPUP_DRAFT_KEY]: popupDraft } = await getStorage([
     "lastPopupState",
@@ -926,9 +1167,12 @@ async function loadConfig() {
     "sites",
     "theme",
     "alwaysShowOutput",
+    "alwaysUseDefaultEnvProfile",
     LAST_TASK_KEY,
     LAST_ENV_KEY,
-    LAST_PROFILE_KEY
+    LAST_PROFILE_KEY,
+    CUSTOM_TASK_MODE_KEY,
+    CUSTOM_TASK_TEXT_KEY
   ]);
   const tasks = normalizeConfigList(stored.tasks);
   const envs = normalizeConfigList(stored.envConfigs);
@@ -968,12 +1212,23 @@ async function loadConfig() {
     state.currentWorkspace = activeWorkspace;
     currentWorkspaceName.textContent = activeWorkspace.name || "Global";
   }
+  if (state.currentSite && !state.siteTextTarget) {
+    state.siteTextTarget = normalizeStoredExtractTarget(state.currentSite);
+  }
   if (stored.theme) {
     state.globalTheme = stored.theme;
   }
   state.alwaysShowOutput = Boolean(stored.alwaysShowOutput);
+  state.alwaysUseDefaultEnvProfile = resolveAlwaysUseDefaultEnvProfile(
+    stored.alwaysUseDefaultEnvProfile,
+    activeWorkspace,
+    activeSite
+  );
   applyTheme(resolveThemeForPopup(state.globalTheme));
   updateOutputVisibility();
+  applyAlwaysUseDefaultEnvProfileState();
+  state.customTaskMode = Boolean(stored[CUSTOM_TASK_MODE_KEY]);
+  state.customTaskText = stored[CUSTOM_TASK_TEXT_KEY] || "";
 
   const effectiveEnvs = resolveEffectiveList(
     envs,
@@ -1000,11 +1255,16 @@ async function loadConfig() {
   renderTasks(effectiveTasks);
   renderEnvironments(effectiveEnvs);
   renderProfiles(effectiveProfiles);
+  if (customTaskInput) {
+    customTaskInput.value = state.customTaskText;
+  }
+  setCustomTaskMode(state.customTaskMode, { persist: false });
 
   if (!effectiveTasks.length) {
     state.selectedTaskId = "";
     setEnvironmentSelection(effectiveEnvs[0]?.id || "");
     setProfileSelection(effectiveProfiles[0]?.id || "");
+    updateCounts();
     return;
   }
 
@@ -1014,22 +1274,24 @@ async function loadConfig() {
   const initialTaskId = effectiveTasks.some((task) => task.id === storedTaskId)
     ? storedTaskId
     : effectiveTasks[0].id;
-  selectTask(initialTaskId, { resetEnv: false });
+  selectTask(initialTaskId, { resetEnv: state.alwaysUseDefaultEnvProfile });
 
   const task = effectiveTasks.find((item) => item.id === initialTaskId);
-  if (storedEnvId && effectiveEnvs.some((env) => env.id === storedEnvId)) {
-    setEnvironmentSelection(storedEnvId);
-  } else {
-    setEnvironmentSelection(getTaskDefaultEnvId(task));
-  }
+  if (!state.alwaysUseDefaultEnvProfile) {
+    if (storedEnvId && effectiveEnvs.some((env) => env.id === storedEnvId)) {
+      setEnvironmentSelection(storedEnvId);
+    } else {
+      setEnvironmentSelection(getTaskDefaultEnvId(task));
+    }
 
-  if (
-    storedProfileId &&
-    effectiveProfiles.some((profile) => profile.id === storedProfileId)
-  ) {
-    setProfileSelection(storedProfileId);
-  } else {
-    setProfileSelection(getTaskDefaultProfileId(task));
+    if (
+      storedProfileId &&
+      effectiveProfiles.some((profile) => profile.id === storedProfileId)
+    ) {
+      setProfileSelection(storedProfileId);
+    } else {
+      setProfileSelection(getTaskDefaultProfileId(task));
+    }
   }
 
   if (
@@ -1040,6 +1302,10 @@ async function loadConfig() {
     await persistSelections();
   }
 
+  updateCounts();
+  if (state.currentSite) {
+    await refreshSiteContentCounts();
+  }
   maybeRunDefaultTask();
 }
 
@@ -1068,8 +1334,7 @@ async function handleExtract() {
 
     state.siteText = response.extracted || "";
     state.siteTextTarget = response.target || target;
-    updateSiteTextCount();
-    updatePromptCount(0);
+    updateCounts();
     setStatus("Text extracted.");
     return true;
   } catch (error) {
@@ -1094,12 +1359,17 @@ async function handleAnalyze() {
   const taskId = taskSelect.value;
   const forcedTask = state.forcedTask;
   const task = forcedTask || state.tasks.find((item) => item.id === taskId);
+  const useCustomTask = state.customTaskMode && !forcedTask;
   if (forcedTask) {
     state.forcedTask = null;
   }
-  if (!task) {
+  if (!useCustomTask && !task) {
     setStatus("Select a task.");
     return;
+  }
+  if (state.alwaysUseDefaultEnvProfile && !forcedTask && !state.customTaskMode) {
+    setEnvironmentSelection(getTaskDefaultEnvId(task));
+    setProfileSelection(getTaskDefaultProfileId(task));
   }
 
   const {
@@ -1139,6 +1409,12 @@ async function handleAnalyze() {
   }
   const resolvedSystemPrompt =
     activeEnv.systemPrompt ?? systemPrompt ?? "";
+  const customTaskText = (state.customTaskText || "").trim();
+  const resolvedTaskText = useCustomTask ? customTaskText : task?.text || "";
+  if (useCustomTask && !resolvedTaskText) {
+    setStatus("Enter a custom task.");
+    return;
+  }
   const resolvedApiConfigId =
     activeEnv.apiConfigId || activeApiConfigId || resolvedConfigs[0]?.id || "";
   const activeConfig =
@@ -1194,12 +1470,7 @@ async function handleAnalyze() {
     }
   }
 
-  const promptText = buildUserMessage(
-    profileText,
-    task.text || "",
-    state.siteText
-  );
-  updatePromptCount(promptText.length);
+  updatePromptCount();
 
   state.outputRaw = "";
   renderOutput();
@@ -1220,7 +1491,7 @@ async function handleAnalyze() {
       model: resolvedModel,
       systemPrompt: resolvedSystemPrompt,
       profileText,
-      taskText: task.text || "",
+      taskText: resolvedTaskText,
       siteText: state.siteText,
       tabId: tab.id
     }
@@ -1298,6 +1569,7 @@ async function runMinimalExtraction(text, minLength = 5) {
       state.siteText = response.extracted;
       state.siteTextTarget = response.target || { kind: "textScope", text: trimmed };
       extractedPreview.textContent = state.siteText;
+      updateCounts();
       await fillSiteDefaultsFromTab();
       switchState("review");
       await persistPopupDraft();
@@ -1336,6 +1608,7 @@ extractFullBtn.addEventListener("click", async () => {
       state.siteText = response.extracted;
       state.siteTextTarget = target;
       extractedPreview.textContent = state.siteText;
+      updateCounts();
       await fillSiteDefaultsFromTab();
       switchState("review");
       await persistPopupDraft();
@@ -1372,6 +1645,7 @@ retryExtractBtn.addEventListener("click", () => {
   if (workspaceSelect) workspaceSelect.value = "global";
   state.siteText = "";
   state.siteTextTarget = null;
+  updateCounts();
   setMinimalStatus("");
   void clearPopupDraft();
   setStatus("Ready.");
@@ -1427,8 +1701,22 @@ confirmSiteBtn.addEventListener("click", async () => {
   currentWorkspaceName.textContent = state.currentWorkspace.name || "Global";
   await loadConfig();
   await switchState("normal");
-  updateSiteTextCount();
+  updateCounts();
   setStatus("Site saved.");
+});
+
+customTaskBtn?.addEventListener("click", () => {
+  setCustomTaskMode(true);
+});
+
+normalTaskBtn?.addEventListener("click", () => {
+  setCustomTaskMode(false);
+});
+
+customTaskInput?.addEventListener("input", () => {
+  state.customTaskText = customTaskInput.value || "";
+  updatePromptCount();
+  void persistCustomTaskState();
 });
 
 runBtn.addEventListener("click", handleExtractAndAnalyze);
@@ -1450,8 +1738,7 @@ profileSelect.addEventListener("change", () => {
   void persistSelections();
 });
 
-updateSiteTextCount();
-updatePromptCount(0);
+updateCounts();
 renderOutput();
 setAnalyzing(false);
 void loadTheme();
@@ -1475,6 +1762,7 @@ async function loadShortcutRunRequest() {
 
   state.shortcutRunPending = true;
   await chrome.storage.local.remove(SHORTCUT_RUN_KEY);
+  setCustomTaskMode(false);
 
   if (!state.tasks.length) {
     await loadConfig();
@@ -1538,7 +1826,13 @@ async function loadShortcutRunRequest() {
   await persistSelections();
   state.autoRunPending = false;
   state.shortcutRunPending = false;
-  void handleExtractAndAnalyze();
+  void handleExtractAndAnalyze().finally(() => {
+    if (!state.alwaysUseDefaultEnvProfile) return;
+    const selectedTask = getSelectedTask();
+    if (!selectedTask) return;
+    setEnvironmentSelection(getTaskDefaultEnvId(selectedTask));
+    setProfileSelection(getTaskDefaultProfileId(selectedTask));
+  });
 }
 
 async function loadAutoRunRequest() {
@@ -1597,4 +1891,28 @@ chrome.storage.onChanged.addListener((changes) => {
     state.alwaysShowOutput = Boolean(changes.alwaysShowOutput.newValue);
     updateOutputVisibility();
   }
+
+  const configKeys = [
+    "tasks",
+    "envConfigs",
+    "profiles",
+    "shortcuts",
+    "workspaces",
+    "sites",
+    "theme",
+    "alwaysShowOutput",
+    "alwaysUseDefaultEnvProfile"
+  ];
+  if (configKeys.some((key) => changes[key])) {
+    scheduleConfigRefresh();
+  }
+});
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type !== "SITE_CONTENT_CHANGED") return;
+  const senderTabId = sender?.tab?.id || null;
+  if (state.activeTabId && senderTabId && senderTabId !== state.activeTabId) {
+    return;
+  }
+  scheduleSiteContentRefresh();
 });

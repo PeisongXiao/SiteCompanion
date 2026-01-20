@@ -47,6 +47,9 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--page-bg);
+  --control-height: 30px;
+  --output-max-height-base: 276px;
+  --output-height-delta: 0px;
 }
 
 .title-block {
@@ -119,7 +122,8 @@ label {
 
 select {
   width: 100%;
-  padding: 6px 8px;
+  height: var(--control-height);
+  padding: 0 8px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--input-bg);
@@ -138,6 +142,49 @@ select {
   margin: 0;
 }
 
+.env-profile-summary {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
+.env-profile-item {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.always-default-env-profile .selector-row {
+  display: none;
+}
+
+body.always-default-env-profile .env-profile-summary {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+body.always-default-env-profile:not(.custom-task-mode) .config-block {
+  row-gap: 0;
+}
+
+body.always-default-env-profile:not(.custom-task-mode) {
+  --output-max-height-base: 309px;
+}
+
+body.custom-task-mode .env-profile-summary {
+  display: none;
+}
+
+body.custom-task-mode.always-default-env-profile .selector-row {
+  display: flex;
+}
+
 .task-row {
   display: flex;
   align-items: flex-end;
@@ -145,7 +192,7 @@ select {
 }
 
 .task-row button {
-  padding: 6px 15px;
+  padding: 0 15px;
 }
 
 .task-row .task-field {
@@ -155,6 +202,37 @@ select {
 
 .task-row select {
   min-width: 0;
+}
+
+.custom-task-row {
+  align-items: stretch;
+}
+
+.custom-task-field {
+  flex: 1;
+  margin: 0;
+}
+
+.custom-task-field textarea {
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--input-fg);
+  font-size: 12px;
+  resize: vertical;
+  min-height: 52px;
+}
+
+.custom-task-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.custom-task-actions button {
+  width: 100%;
 }
 
 .hidden {
@@ -221,9 +299,16 @@ button {
   font-family: inherit;
   border: none;
   border-radius: 10px;
-  padding: 6px 10px;
+  padding: 0 10px;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+button.control-btn {
+  height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 button:disabled {
@@ -287,14 +372,14 @@ button:active {
   padding: 8px;
   background: var(--output-bg);
   min-height: 210px;
-  max-height: 280px;
+  max-height: calc(var(--output-max-height-base) - var(--output-height-delta));
   overflow: hidden;
 }
 
 .output-body {
   margin: 0;
   word-break: break-word;
-  max-height: 260px;
+  max-height: calc(var(--output-max-height-base) - var(--output-height-delta) - 20px);
   overflow-y: auto;
   font-size: 11px;
   line-height: 1.45;
@@ -382,6 +467,10 @@ button:active {
   align-items: center;
   margin-top: 6px;
   gap: 8px;
+}
+
+.footer.compact {
+  justify-content: flex-end;
 }
 
 .footer-left {

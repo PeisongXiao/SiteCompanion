@@ -17,6 +17,8 @@ const DEFAULT_SETTINGS = {
   theme: "system",
   toolbarAutoHide: true,
   alwaysShowOutput: false,
+  alwaysUseDefaultEnvProfile: false,
+  emptyToolbarBehavior: "open",
   workspaces: []
 };
 

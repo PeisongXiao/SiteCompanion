@@ -749,6 +749,10 @@ button:active {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.inline-fields.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .inline-fields .field {
   margin-bottom: 0;
 }

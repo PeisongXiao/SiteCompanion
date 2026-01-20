@@ -19,8 +19,14 @@ const statusSidebarEl = document.getElementById("statusSidebar");
 const sidebarErrorsEl = document.getElementById("sidebarErrors");
 const themeSelect = document.getElementById("themeSelect");
 const toolbarPositionSelect = document.getElementById("toolbarPositionSelect");
+const emptyToolbarBehaviorSelect = document.getElementById(
+  "emptyToolbarBehaviorSelect"
+);
 const toolbarAutoHide = document.getElementById("toolbarAutoHide");
 const alwaysShowOutput = document.getElementById("alwaysShowOutput");
+const alwaysUseDefaultEnvProfileSelect = document.getElementById(
+  "alwaysUseDefaultEnvProfileSelect"
+);
 const globalSitesContainer = document.getElementById("globalSites");
 const toc = document.querySelector(".toc");
 const tocResizer = document.getElementById("tocResizer");
@@ -453,8 +459,14 @@ function buildSettingsSnapshot() {
     toolbarPosition: toolbarPositionSelect
       ? toolbarPositionSelect.value
       : "bottom-right",
+    emptyToolbarBehavior: emptyToolbarBehaviorSelect
+      ? emptyToolbarBehaviorSelect.value
+      : "open",
     toolbarAutoHide: toolbarAutoHide ? toolbarAutoHide.checked : true,
-    alwaysShowOutput: alwaysShowOutput ? alwaysShowOutput.checked : false
+    alwaysShowOutput: alwaysShowOutput ? alwaysShowOutput.checked : false,
+    alwaysUseDefaultEnvProfile: alwaysUseDefaultEnvProfileSelect
+      ? alwaysUseDefaultEnvProfileSelect.value === "enabled"
+      : false
   });
 }
 
@@ -517,6 +529,35 @@ function scheduleSidebarErrors() {
     sidebarErrorFrame = null;
     updateSidebarErrors();
   });
+}
+
+let tocUpdateFrame = null;
+function scheduleTocUpdate() {
+  if (!toc) return;
+  if (tocUpdateFrame) return;
+  tocUpdateFrame = requestAnimationFrame(() => {
+    tocUpdateFrame = null;
+    updateToc(collectWorkspaces(), collectSites());
+  });
+}
+
+const TOC_NAME_INPUT_SELECTOR = [
+  ".api-key-name",
+  ".api-config-name",
+  ".env-config-name",
+  ".profile-name",
+  ".task-name",
+  ".shortcut-name",
+  ".workspace-name",
+  ".site-name",
+  ".site-pattern"
+].join(", ");
+
+function handleTocNameInput(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (!target.matches(TOC_NAME_INPUT_SELECTOR)) return;
+  scheduleTocUpdate();
 }
 
 function renderGlobalSitesList(sites) {
@@ -1230,6 +1271,7 @@ function updateApiConfigControls() {
     if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
   });
   scheduleSidebarErrors();
+  scheduleTocUpdate();
 }
 
 function buildApiKeyCard(entry) {
@@ -1404,6 +1446,7 @@ function updateApiKeyControls() {
     if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
   });
   scheduleSidebarErrors();
+  scheduleTocUpdate();
 }
 
 function updateApiConfigKeyOptions() {
@@ -1630,6 +1673,7 @@ function updateEnvControls(container = envConfigsContainer) {
     if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
   });
   scheduleSidebarErrors();
+  scheduleTocUpdate();
 }
 
 function updateTaskEnvOptionsForContainer(container, envs, allEnvsById) {
@@ -1879,6 +1923,7 @@ function updateProfileControls(container = profilesContainer) {
     if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
   });
   scheduleSidebarErrors();
+  scheduleTocUpdate();
 }
 
 function updateTaskProfileOptionsForContainer(container, profiles, allProfilesById) {
@@ -1952,7 +1997,9 @@ function updateEnvApiOptionsForContainer(container, apiConfigs) {
   if (!container) return;
   const selects = container.querySelectorAll(".env-config-api-select");
   selects.forEach((select) => {
-    select.dataset.preferred = select.value;
+    if (select.value) {
+      select.dataset.preferred = select.value;
+    }
     populateSelect(select, apiConfigs, "No API configs configured");
   });
 }
@@ -2195,15 +2242,21 @@ function updateShortcutOptionsForContainer(container, options = {}) {
     const profileSelect = card.querySelector(".shortcut-profile");
     const taskSelect = card.querySelector(".shortcut-task");
     if (envSelect) {
-      envSelect.dataset.preferred = envSelect.value;
+      if (envSelect.value) {
+        envSelect.dataset.preferred = envSelect.value;
+      }
       populateSelect(envSelect, envs, "No environments configured");
     }
     if (profileSelect) {
-      profileSelect.dataset.preferred = profileSelect.value;
+      if (profileSelect.value) {
+        profileSelect.dataset.preferred = profileSelect.value;
+      }
       populateSelect(profileSelect, profiles, "No profiles configured");
     }
     if (taskSelect) {
-      taskSelect.dataset.preferred = taskSelect.value;
+      if (taskSelect.value) {
+        taskSelect.dataset.preferred = taskSelect.value;
+      }
       populateSelect(taskSelect, tasks, "No tasks configured");
     }
   });
@@ -2246,6 +2299,10 @@ function collectWorkspaces() {
     const nameInput = card.querySelector(".workspace-name");
     const themeSelect = card.querySelector(".appearance-theme");
     const toolbarSelect = card.querySelector(".appearance-toolbar-position");
+    const defaultEnvProfileSelect = card.querySelector(
+      ".appearance-default-env-profile"
+    );
+    const emptyToolbarSelect = card.querySelector(".appearance-empty-toolbar");
     
     // Collect nested resources
     const envsContainer = card.querySelector(".workspace-envs");
@@ -2269,6 +2326,12 @@ function collectWorkspaces() {
       name: (nameInput?.value || "Untitled Workspace").trim(),
       theme: themeSelect?.value || "inherit",
       toolbarPosition: toolbarSelect?.value || "inherit",
+      alwaysUseDefaultEnvProfile: normalizeAppearanceToggle(
+        defaultEnvProfileSelect?.value
+      ),
+      emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+        emptyToolbarSelect?.value
+      ),
       envConfigs: envsContainer ? collectEnvConfigs(envsContainer) : [],
       profiles: profilesContainer ? collectProfiles(profilesContainer) : [],
       tasks: tasksContainer ? collectTasks(tasksContainer) : [],
@@ -2381,12 +2444,196 @@ function renderWorkspaceSection(title, containerClass, items, builder, newItemFa
   summaryRight.appendChild(addBtn);
   body.appendChild(listContainer);
   details.appendChild(body);
-  
+
   return details;
 }
 
+const THEME_LABELS = {
+  system: "System",
+  light: "Light",
+  dark: "Dark"
+};
+
+const TOOLBAR_POSITION_LABELS = {
+  "bottom-right": "Bottom Right",
+  "bottom-left": "Bottom Left",
+  "top-right": "Top Right",
+  "top-left": "Top Left",
+  "bottom-center": "Bottom Center"
+};
+
+const EMPTY_TOOLBAR_BEHAVIOR_LABELS = {
+  hide: "Hide Toolbar",
+  open: 'Show "Open SiteCompanion"'
+};
+
+function normalizeAppearanceToggle(value) {
+  if (value === "inherit" || value === "enabled" || value === "disabled") {
+    return value;
+  }
+  if (value === true) return "enabled";
+  if (value === false) return "disabled";
+  return "inherit";
+}
+
+function normalizeEmptyToolbarBehavior(value, allowInherit = true) {
+  if (value === "hide" || value === "open") return value;
+  if (allowInherit && value === "inherit") return "inherit";
+  return allowInherit ? "inherit" : "open";
+}
+
+function resolveAppearanceToggleValue(value, fallback) {
+  const normalized = normalizeAppearanceToggle(value);
+  if (normalized === "inherit") return Boolean(fallback);
+  return normalized === "enabled";
+}
+
+function getThemeLabel(value) {
+  return THEME_LABELS[value] || String(value || "System");
+}
+
+function getToolbarPositionLabel(value) {
+  return TOOLBAR_POSITION_LABELS[value] || String(value || "Bottom Right");
+}
+
+function getDefaultEnvProfileLabel(value) {
+  return value ? "Enabled" : "Disabled";
+}
+
+function getEmptyToolbarBehaviorLabel(value) {
+  return EMPTY_TOOLBAR_BEHAVIOR_LABELS[value] || "Hide Toolbar";
+}
+
+function getGlobalAppearanceConfig() {
+  return {
+    theme: themeSelect?.value || "system",
+    toolbarPosition: toolbarPositionSelect?.value || "bottom-right",
+    alwaysUseDefaultEnvProfile: resolveAppearanceToggleValue(
+      alwaysUseDefaultEnvProfileSelect?.value,
+      false
+    ),
+    emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+      emptyToolbarBehaviorSelect?.value,
+      false
+    )
+  };
+}
+
+function updateAppearanceInheritedHint(selectEl, hintEl, label) {
+  if (!selectEl || !hintEl) return;
+  if (selectEl.value !== "inherit") {
+    hintEl.textContent = "Not inheriting";
+    hintEl.classList.remove("hidden");
+    return;
+  }
+  hintEl.textContent = `Inherited: ${label}`;
+  hintEl.classList.remove("hidden");
+}
+
+function updateAppearanceInheritanceIndicators() {
+  const global = getGlobalAppearanceConfig();
+  const workspaceCards = document.querySelectorAll(".workspace-card");
+  const workspaceAppearance = new Map();
+
+  workspaceCards.forEach((card) => {
+    const themeSelect = card.querySelector(".appearance-theme");
+    const toolbarSelect = card.querySelector(".appearance-toolbar-position");
+    const defaultSelect = card.querySelector(".appearance-default-env-profile");
+    const emptyToolbarSelect = card.querySelector(".appearance-empty-toolbar");
+    const themeValue = themeSelect?.value || "inherit";
+    const toolbarValue = toolbarSelect?.value || "inherit";
+    const defaultValue = defaultSelect?.value || "inherit";
+    const emptyToolbarValue = normalizeEmptyToolbarBehavior(
+      emptyToolbarSelect?.value || "inherit"
+    );
+    const resolvedTheme =
+      themeValue === "inherit" ? global.theme : themeValue;
+    const resolvedToolbar =
+      toolbarValue === "inherit" ? global.toolbarPosition : toolbarValue;
+    const resolvedDefault = resolveAppearanceToggleValue(
+      defaultValue,
+      global.alwaysUseDefaultEnvProfile
+    );
+    const resolvedEmptyToolbar =
+      emptyToolbarValue === "inherit"
+        ? global.emptyToolbarBehavior
+        : emptyToolbarValue;
+    workspaceAppearance.set(card.dataset.id, {
+      theme: resolvedTheme,
+      toolbarPosition: resolvedToolbar,
+      alwaysUseDefaultEnvProfile: resolvedDefault,
+      emptyToolbarBehavior: resolvedEmptyToolbar
+    });
+
+    updateAppearanceInheritedHint(
+      themeSelect,
+      card.querySelector('.appearance-inherited[data-appearance-key="theme"]'),
+      getThemeLabel(global.theme)
+    );
+    updateAppearanceInheritedHint(
+      toolbarSelect,
+      card.querySelector(
+        '.appearance-inherited[data-appearance-key="toolbarPosition"]'
+      ),
+      getToolbarPositionLabel(global.toolbarPosition)
+    );
+    updateAppearanceInheritedHint(
+      defaultSelect,
+      card.querySelector(
+        '.appearance-inherited[data-appearance-key="alwaysUseDefaultEnvProfile"]'
+      ),
+      getDefaultEnvProfileLabel(global.alwaysUseDefaultEnvProfile)
+    );
+    updateAppearanceInheritedHint(
+      emptyToolbarSelect,
+      card.querySelector(
+        '.appearance-inherited[data-appearance-key="emptyToolbarBehavior"]'
+      ),
+      getEmptyToolbarBehaviorLabel(global.emptyToolbarBehavior)
+    );
+  });
+
+  const siteCards = document.querySelectorAll(".site-card");
+  siteCards.forEach((card) => {
+    const workspaceId = card.querySelector(".site-workspace")?.value || "global";
+    const resolved =
+      workspaceAppearance.get(workspaceId) || global;
+    updateAppearanceInheritedHint(
+      card.querySelector(".appearance-theme"),
+      card.querySelector('.appearance-inherited[data-appearance-key="theme"]'),
+      getThemeLabel(resolved.theme)
+    );
+    updateAppearanceInheritedHint(
+      card.querySelector(".appearance-toolbar-position"),
+      card.querySelector(
+        '.appearance-inherited[data-appearance-key="toolbarPosition"]'
+      ),
+      getToolbarPositionLabel(resolved.toolbarPosition)
+    );
+    updateAppearanceInheritedHint(
+      card.querySelector(".appearance-default-env-profile"),
+      card.querySelector(
+        '.appearance-inherited[data-appearance-key="alwaysUseDefaultEnvProfile"]'
+      ),
+      getDefaultEnvProfileLabel(resolved.alwaysUseDefaultEnvProfile)
+    );
+    updateAppearanceInheritedHint(
+      card.querySelector(".appearance-empty-toolbar"),
+      card.querySelector(
+        '.appearance-inherited[data-appearance-key="emptyToolbarBehavior"]'
+      ),
+      getEmptyToolbarBehaviorLabel(resolved.emptyToolbarBehavior)
+    );
+  });
+}
+
 function buildAppearanceSection(
-  { theme = "inherit", toolbarPosition = "inherit" } = {},
+  {
+    theme = "inherit",
+    toolbarPosition = "inherit",
+    alwaysUseDefaultEnvProfile = "inherit",
+    emptyToolbarBehavior = "inherit"
+  } = {},
   { stateKey } = {}
 ) {
   const details = document.createElement("details");
@@ -2434,6 +2681,10 @@ function buildAppearanceSection(
   themeSelect.value = theme || "inherit";
   themeField.appendChild(themeLabel);
   themeField.appendChild(themeSelect);
+  const themeHint = document.createElement("div");
+  themeHint.className = "hint appearance-inherited hidden";
+  themeHint.dataset.appearanceKey = "theme";
+  themeField.appendChild(themeHint);
 
   const toolbarField = document.createElement("div");
   toolbarField.className = "field";
@@ -2466,11 +2717,69 @@ function buildAppearanceSection(
   toolbarSelect.value = toolbarPosition || "inherit";
   toolbarField.appendChild(toolbarLabel);
   toolbarField.appendChild(toolbarSelect);
+  const toolbarHint = document.createElement("div");
+  toolbarHint.className = "hint appearance-inherited hidden";
+  toolbarHint.dataset.appearanceKey = "toolbarPosition";
+  toolbarField.appendChild(toolbarHint);
+
+  const defaultField = document.createElement("div");
+  defaultField.className = "field";
+  const defaultLabel = document.createElement("label");
+  defaultLabel.textContent = "Always use default ENV/PROFILE";
+  const defaultSelect = document.createElement("select");
+  defaultSelect.className = "appearance-default-env-profile";
+  const defaultOptions = [
+    { value: "inherit", label: "Inherit" },
+    { value: "enabled", label: "Enabled" },
+    { value: "disabled", label: "Disabled" }
+  ];
+  for (const optValue of defaultOptions) {
+    const opt = document.createElement("option");
+    opt.value = optValue.value;
+    opt.textContent = optValue.label;
+    defaultSelect.appendChild(opt);
+  }
+  defaultSelect.value = normalizeAppearanceToggle(alwaysUseDefaultEnvProfile);
+  defaultField.appendChild(defaultLabel);
+  defaultField.appendChild(defaultSelect);
+  const defaultHint = document.createElement("div");
+  defaultHint.className = "hint appearance-inherited hidden";
+  defaultHint.dataset.appearanceKey = "alwaysUseDefaultEnvProfile";
+  defaultField.appendChild(defaultHint);
+
+  const emptyToolbarField = document.createElement("div");
+  emptyToolbarField.className = "field";
+  const emptyToolbarLabel = document.createElement("label");
+  emptyToolbarLabel.textContent = "Empty toolbar";
+  const emptyToolbarSelect = document.createElement("select");
+  emptyToolbarSelect.className = "appearance-empty-toolbar";
+  const emptyToolbarOptions = [
+    { value: "inherit", label: "Inherit" },
+    { value: "hide", label: "Hide Toolbar" },
+    { value: "open", label: 'Show "Open SiteCompanion"' }
+  ];
+  for (const optionConfig of emptyToolbarOptions) {
+    const opt = document.createElement("option");
+    opt.value = optionConfig.value;
+    opt.textContent = optionConfig.label;
+    emptyToolbarSelect.appendChild(opt);
+  }
+  emptyToolbarSelect.value = normalizeEmptyToolbarBehavior(
+    emptyToolbarBehavior
+  );
+  emptyToolbarField.appendChild(emptyToolbarLabel);
+  emptyToolbarField.appendChild(emptyToolbarSelect);
+  const emptyToolbarHint = document.createElement("div");
+  emptyToolbarHint.className = "hint appearance-inherited hidden";
+  emptyToolbarHint.dataset.appearanceKey = "emptyToolbarBehavior";
+  emptyToolbarField.appendChild(emptyToolbarHint);
 
   const appearanceRow = document.createElement("div");
-  appearanceRow.className = "inline-fields two appearance-fields";
+  appearanceRow.className = "inline-fields four appearance-fields";
   appearanceRow.appendChild(themeField);
   appearanceRow.appendChild(toolbarField);
+  appearanceRow.appendChild(defaultField);
+  appearanceRow.appendChild(emptyToolbarField);
   body.appendChild(appearanceRow);
   details.appendChild(body);
   registerDetail(details, details.open);
@@ -3983,6 +4292,7 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
     if (confirm(`Delete workspace "${ws.name}"? All items will move to global.`)) {
       card.remove();
       scheduleSidebarErrors();
+      updateAppearanceInheritanceIndicators();
       updateToc(collectWorkspaces(), collectSites());
     }
   });
@@ -3993,7 +4303,13 @@ function buildWorkspaceCard(ws, allWorkspaces = [], allSites = []) {
   const appearanceSection = buildAppearanceSection(
     {
       theme: ws.theme || "inherit",
-      toolbarPosition: ws.toolbarPosition || "inherit"
+      toolbarPosition: ws.toolbarPosition || "inherit",
+      alwaysUseDefaultEnvProfile: normalizeAppearanceToggle(
+        ws.alwaysUseDefaultEnvProfile
+      ),
+      emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+        ws.emptyToolbarBehavior
+      )
     },
     { stateKey: `workspace:${card.dataset.id}:appearance` }
   );
@@ -4214,6 +4530,10 @@ function collectSites() {
     const parsedTarget = parseExtractionTargetInput(extractInput?.value || "");
     const themeSelect = card.querySelector(".appearance-theme");
     const toolbarSelect = card.querySelector(".appearance-toolbar-position");
+    const defaultEnvProfileSelect = card.querySelector(
+      ".appearance-default-env-profile"
+    );
+    const emptyToolbarSelect = card.querySelector(".appearance-empty-toolbar");
     const envsContainer = card.querySelector(".site-envs");
     const profilesContainer = card.querySelector(".site-profiles");
     const tasksContainer = card.querySelector(".site-tasks");
@@ -4231,6 +4551,12 @@ function collectSites() {
       extractTarget: parsedTarget.target,
       theme: themeSelect?.value || "inherit",
       toolbarPosition: toolbarSelect?.value || "inherit",
+      alwaysUseDefaultEnvProfile: normalizeAppearanceToggle(
+        defaultEnvProfileSelect?.value
+      ),
+      emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+        emptyToolbarSelect?.value
+      ),
       envConfigs: envsContainer ? collectEnvConfigs(envsContainer) : [],
       profiles: profilesContainer ? collectProfiles(profilesContainer) : [],
       tasks: tasksContainer ? collectTasks(tasksContainer) : [],
@@ -4380,7 +4706,13 @@ function buildSiteCard(site, allWorkspaces = []) {
   const appearanceSection = buildAppearanceSection(
     {
       theme: site.theme || "inherit",
-      toolbarPosition: site.toolbarPosition || "inherit"
+      toolbarPosition: site.toolbarPosition || "inherit",
+      alwaysUseDefaultEnvProfile: normalizeAppearanceToggle(
+        site.alwaysUseDefaultEnvProfile
+      ),
+      emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+        site.emptyToolbarBehavior
+      )
     },
     { stateKey: `site:${card.dataset.id}:appearance` }
   );
@@ -5026,6 +5358,7 @@ function updateShortcutControls(container = shortcutsContainer) {
     if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
   });
   scheduleSidebarErrors();
+  scheduleTocUpdate();
 }
 
 function updateTaskControls(container = tasksContainer) {
@@ -5039,6 +5372,7 @@ function updateTaskControls(container = tasksContainer) {
     if (moveDownBtn) moveDownBtn.disabled = index === cards.length - 1;
   });
   scheduleSidebarErrors();
+  scheduleTocUpdate();
 }
 
 function collectTasks(container = tasksContainer) {
@@ -5345,6 +5679,8 @@ async function loadSettings() {
     toolbarPosition = "bottom-right",
     toolbarAutoHide: storedToolbarAutoHide = true,
     alwaysShowOutput: storedAlwaysShowOutput = false,
+    alwaysUseDefaultEnvProfile: storedAlwaysUseDefaultEnvProfile = false,
+    emptyToolbarBehavior: storedEmptyToolbarBehavior = "open",
     sidebarWidth
   } = await getStorage([
     "apiKey",
@@ -5367,6 +5703,8 @@ async function loadSettings() {
     "sites",
     "toolbarPosition",
     "toolbarAutoHide",
+    "emptyToolbarBehavior",
+    "alwaysUseDefaultEnvProfile",
     SIDEBAR_WIDTH_KEY
   ]);
 
@@ -5379,8 +5717,21 @@ async function loadSettings() {
   if (toolbarAutoHide) {
     toolbarAutoHide.checked = Boolean(storedToolbarAutoHide);
   }
+  if (emptyToolbarBehaviorSelect) {
+    emptyToolbarBehaviorSelect.value = normalizeEmptyToolbarBehavior(
+      storedEmptyToolbarBehavior,
+      false
+    );
+  }
   if (alwaysShowOutput) {
     alwaysShowOutput.checked = Boolean(storedAlwaysShowOutput);
+  }
+  if (alwaysUseDefaultEnvProfileSelect) {
+    const normalizedDefault = normalizeAppearanceToggle(
+      storedAlwaysUseDefaultEnvProfile
+    );
+    alwaysUseDefaultEnvProfileSelect.value =
+      normalizedDefault === "enabled" ? "enabled" : "disabled";
   }
   if (Number.isFinite(sidebarWidth)) {
     applySidebarWidth(sidebarWidth);
@@ -5417,6 +5768,12 @@ async function loadSettings() {
         ...workspace,
         theme: workspace.theme || "inherit",
         toolbarPosition: workspace.toolbarPosition || "inherit",
+        alwaysUseDefaultEnvProfile: normalizeAppearanceToggle(
+          workspace.alwaysUseDefaultEnvProfile
+        ),
+        emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+          workspace.emptyToolbarBehavior
+        ),
         envConfigs: normalizeConfigList(workspace.envConfigs),
         profiles: normalizeConfigList(workspace.profiles),
         tasks: normalizeConfigList(workspace.tasks),
@@ -5441,6 +5798,12 @@ async function loadSettings() {
         extractTarget: normalizedTarget.target,
         theme: site.theme || "inherit",
         toolbarPosition: site.toolbarPosition || "inherit",
+        alwaysUseDefaultEnvProfile: normalizeAppearanceToggle(
+          site.alwaysUseDefaultEnvProfile
+        ),
+        emptyToolbarBehavior: normalizeEmptyToolbarBehavior(
+          site.emptyToolbarBehavior
+        ),
         envConfigs: normalizeConfigList(site.envConfigs),
         profiles: normalizeConfigList(site.profiles),
         tasks: normalizeConfigList(site.tasks),
@@ -5742,6 +6105,7 @@ async function loadSettings() {
   updateSidebarErrors();
   updateToc(workspaces, sites);
   renderGlobalSitesList(sites);
+  updateAppearanceInheritanceIndicators();
 }
 
 async function saveSettings() {
@@ -5870,8 +6234,14 @@ async function saveSettings() {
       toolbarPosition: toolbarPositionSelect
         ? toolbarPositionSelect.value
         : "bottom-right",
+      emptyToolbarBehavior: emptyToolbarBehaviorSelect
+        ? emptyToolbarBehaviorSelect.value
+        : "open",
       toolbarAutoHide: toolbarAutoHide ? toolbarAutoHide.checked : true,
       alwaysShowOutput: alwaysShowOutput ? alwaysShowOutput.checked : false,
+      alwaysUseDefaultEnvProfile: alwaysUseDefaultEnvProfileSelect
+        ? alwaysUseDefaultEnvProfileSelect.value === "enabled"
+        : false,
       workspaces: updatedWorkspaces,
       sites: mergedSites
     });
@@ -6016,6 +6386,8 @@ addWorkspaceBtn.addEventListener("click", () => {
     name: "New Workspace",
     theme: "inherit",
     toolbarPosition: "inherit",
+    alwaysUseDefaultEnvProfile: "inherit",
+    emptyToolbarBehavior: "inherit",
     envConfigs: [],
     profiles: [],
     tasks: [],
@@ -6032,6 +6404,7 @@ addWorkspaceBtn.addEventListener("click", () => {
   centerCardInView(newCard);
   refreshWorkspaceInheritedLists();
   scheduleSidebarErrors();
+  updateAppearanceInheritanceIndicators();
   updateToc(collectWorkspaces(), collectSites());
 });
 
@@ -6044,6 +6417,8 @@ addSiteBtn.addEventListener("click", () => {
     workspaceId: "global",
     theme: "inherit",
     toolbarPosition: "inherit",
+    alwaysUseDefaultEnvProfile: "inherit",
+    emptyToolbarBehavior: "inherit",
     envConfigs: [],
     profiles: [],
     tasks: [],
@@ -6060,6 +6435,7 @@ addSiteBtn.addEventListener("click", () => {
   centerCardInView(newCard);
   refreshSiteInheritedLists();
   scheduleSidebarErrors();
+  updateAppearanceInheritanceIndicators();
   updateToc(collectWorkspaces(), collectSites());
 });
 
@@ -6109,6 +6485,9 @@ async function initSettings() {
   registerAllDetails();
   restoreScrollPosition();
   initDirtyObserver();
+  if (settingsLayout) {
+    settingsLayout.addEventListener("input", handleTocNameInput);
+  }
   captureSavedSnapshot();
   suppressDirtyTracking = false;
   window.addEventListener("scroll", handleSettingsScroll, { passive: true });
@@ -6563,6 +6942,7 @@ function handleSettingsInputChange() {
   scheduleSidebarErrors();
   scheduleDirtyCheck();
   refreshInheritedSourceLabels();
+  updateAppearanceInheritanceIndicators();
 }
 
 document.addEventListener("input", handleSettingsInputChange);

@@ -119,6 +119,7 @@ chrome.runtime.onInstalled.addListener(async () => {
         apiKeyId: fallbackKeyId,
         apiUrl: "",
         requestTemplate: "",
+        requestHeadersTemplate: "",
         advanced: false
       }
     ];
@@ -140,6 +141,7 @@ chrome.runtime.onInstalled.addListener(async () => {
       apiKeyId: config.apiKeyId || fallbackKeyId,
       apiUrl: config.apiUrl || "",
       requestTemplate: config.requestTemplate || "",
+      requestHeadersTemplate: config.requestHeadersTemplate || "",
       advanced: Boolean(config.advanced)
     }));
     const needsUpdate = normalizedConfigs.some((config, index) => {
@@ -148,6 +150,8 @@ chrome.runtime.onInstalled.addListener(async () => {
         config.apiKeyId !== original.apiKeyId ||
         (config.apiUrl || "") !== (original.apiUrl || "") ||
         (config.requestTemplate || "") !== (original.requestTemplate || "") ||
+        (config.requestHeadersTemplate || "") !==
+          (original.requestHeadersTemplate || "") ||
         Boolean(config.advanced) !== Boolean(original.advanced)
       );
     });
@@ -166,6 +170,7 @@ chrome.runtime.onInstalled.addListener(async () => {
       apiKeyId: config.apiKeyId || fallbackKeyId,
       apiUrl: config.apiUrl || "",
       requestTemplate: config.requestTemplate || "",
+      requestHeadersTemplate: config.requestHeadersTemplate || "",
       advanced: Boolean(config.advanced)
     }));
     const needsUpdate = normalizedConfigs.some((config, index) => {
@@ -174,6 +179,8 @@ chrome.runtime.onInstalled.addListener(async () => {
         config.apiKeyId !== original.apiKeyId ||
         (config.apiUrl || "") !== (original.apiUrl || "") ||
         (config.requestTemplate || "") !== (original.requestTemplate || "") ||
+        (config.requestHeadersTemplate || "") !==
+          (original.requestHeadersTemplate || "") ||
         Boolean(config.advanced) !== Boolean(original.advanced)
       );
     });
@@ -404,6 +411,7 @@ async function handleAnalysisRequest(port, payload, signal) {
     apiMode,
     apiUrl,
     requestTemplate,
+    requestHeadersTemplate,
     apiBaseUrl,
     apiKeyHeader,
     apiKeyPrefix,
@@ -469,6 +477,7 @@ async function handleAnalysisRequest(port, payload, signal) {
         apiKey,
         apiUrl,
         requestTemplate,
+        requestHeadersTemplate,
         apiKeyHeader: resolvedApiKeyHeader,
         apiKeyPrefix: resolvedApiKeyPrefix,
         apiBaseUrl,
@@ -527,11 +536,18 @@ function replaceQuotedToken(template, token, value) {
   return template.split(quoted).join(jsonValue);
 }
 
+function getPlaceholderVariants(token) {
+  return [`<${token}>`, token];
+}
+
 function replaceTemplateTokens(template, replacements) {
   let output = template || "";
   for (const [token, value] of Object.entries(replacements)) {
-    output = replaceQuotedToken(output, token, value ?? "");
-    output = output.split(token).join(value ?? "");
+    const variants = getPlaceholderVariants(token);
+    for (const variant of variants) {
+      output = replaceQuotedToken(output, variant, value ?? "");
+      output = output.split(variant).join(value ?? "");
+    }
   }
   return output;
 }
@@ -539,7 +555,10 @@ function replaceTemplateTokens(template, replacements) {
 function replaceUrlTokens(url, replacements) {
   let output = url || "";
   for (const [token, value] of Object.entries(replacements)) {
-    output = output.split(token).join(encodeURIComponent(value ?? ""));
+    const variants = getPlaceholderVariants(token);
+    for (const variant of variants) {
+      output = output.split(variant).join(encodeURIComponent(value ?? ""));
+    }
   }
   return output;
 }
@@ -551,6 +570,21 @@ function buildTemplateBody(template, replacements) {
   } catch {
     throw new Error("Invalid request template JSON.");
   }
+}
+
+function buildTemplateHeaders(template, replacements) {
+  if (!template) return {};
+  const filled = replaceTemplateTokens(template, replacements);
+  let parsed;
+  try {
+    parsed = JSON.parse(filled);
+  } catch {
+    throw new Error("Invalid request headers JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Request headers JSON must be an object.");
+  }
+  return parsed;
 }
 
 function extractStreamDelta(parsed) {
@@ -674,6 +708,7 @@ async function streamCustomCompletion({
   apiKey,
   apiUrl,
   requestTemplate,
+  requestHeadersTemplate,
   apiKeyHeader,
   apiKeyPrefix,
   apiBaseUrl,
@@ -692,9 +727,11 @@ async function streamCustomCompletion({
   };
   const resolvedUrl = replaceUrlTokens(apiUrl, replacements);
   const body = buildTemplateBody(requestTemplate, replacements);
+  const customHeaders = buildTemplateHeaders(requestHeadersTemplate, replacements);
 
   const headers = {
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    ...customHeaders
   };
   const authHeader = buildAuthHeader(apiKeyHeader, apiKeyPrefix, apiKey);
   if (authHeader) {

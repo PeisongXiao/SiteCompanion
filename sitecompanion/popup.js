@@ -217,11 +217,18 @@ const TEMPLATE_PLACEHOLDERS = [
   "API_BASE_URL_GOES_HERE"
 ].sort((a, b) => b.length - a.length);
 
+function getPlaceholderVariants(token) {
+  return [`<${token}>`, token];
+}
+
 function buildTemplateValidationSource(template) {
   let output = template || "";
   for (const token of TEMPLATE_PLACEHOLDERS) {
-    output = output.split(`\"${token}\"`).join(JSON.stringify("PLACEHOLDER"));
-    output = output.split(token).join("null");
+    const variants = getPlaceholderVariants(token);
+    for (const variant of variants) {
+      output = output.split(`\"${variant}\"`).join(JSON.stringify("PLACEHOLDER"));
+      output = output.split(variant).join("null");
+    }
   }
   return output;
 }
@@ -252,6 +259,11 @@ function isValidTemplateJson(template) {
   } catch {
     return false;
   }
+}
+
+function isValidOptionalTemplateJson(template) {
+  if (!template || !template.trim()) return true;
+  return isValidTemplateJson(template);
 }
 
 function resolveScopedItems(parentItems, localItems, disabledNames) {
@@ -1433,6 +1445,7 @@ async function handleAnalyze() {
   const isAdvanced = Boolean(activeConfig?.advanced);
   const resolvedApiUrl = activeConfig?.apiUrl || "";
   const resolvedTemplate = activeConfig?.requestTemplate || "";
+  const resolvedHeadersTemplate = activeConfig?.requestHeadersTemplate || "";
   const resolvedApiBaseUrl = activeConfig?.apiBaseUrl || apiBaseUrl || "";
   const resolvedApiKeyHeader = isAdvanced ? "" : DEFAULT_API_KEY_HEADER;
   const resolvedApiKeyPrefix = isAdvanced ? "" : DEFAULT_API_KEY_PREFIX;
@@ -1453,6 +1466,10 @@ async function handleAnalyze() {
     }
     if (!isValidTemplateJson(resolvedTemplate)) {
       setStatus("Request template JSON is invalid.");
+      return;
+    }
+    if (!isValidOptionalTemplateJson(resolvedHeadersTemplate)) {
+      setStatus("Request headers JSON is invalid.");
       return;
     }
   } else {
@@ -1485,6 +1502,7 @@ async function handleAnalyze() {
       apiMode: isAdvanced ? "advanced" : "basic",
       apiUrl: resolvedApiUrl,
       requestTemplate: resolvedTemplate,
+      requestHeadersTemplate: resolvedHeadersTemplate,
       apiBaseUrl: resolvedApiBaseUrl,
       apiKeyHeader: resolvedApiKeyHeader,
       apiKeyPrefix: resolvedApiKeyPrefix,

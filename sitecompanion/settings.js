@@ -867,11 +867,18 @@ const TEMPLATE_PLACEHOLDERS = [
   "API_BASE_URL_GOES_HERE"
 ].sort((a, b) => b.length - a.length);
 
+function getPlaceholderVariants(token) {
+  return [`<${token}>`, token];
+}
+
 function buildTemplateValidationSource(template) {
   let output = template || "";
   for (const token of TEMPLATE_PLACEHOLDERS) {
-    output = output.split(`\"${token}\"`).join(JSON.stringify("PLACEHOLDER"));
-    output = output.split(token).join("null");
+    const variants = getPlaceholderVariants(token);
+    for (const variant of variants) {
+      output = output.split(`\"${variant}\"`).join(JSON.stringify("PLACEHOLDER"));
+      output = output.split(variant).join("null");
+    }
   }
   return output;
 }
@@ -902,6 +909,11 @@ function isValidTemplateJson(template) {
   } catch {
     return false;
   }
+}
+
+function isValidOptionalTemplateJson(template) {
+  if (!template || !template.trim()) return true;
+  return isValidTemplateJson(template);
 }
 
 function normalizeDisabledInherited(source) {
@@ -957,6 +969,7 @@ function readApiConfigFromCard(card) {
   const modelInput = card.querySelector(".api-config-model");
   const urlInput = card.querySelector(".api-config-url");
   const templateInput = card.querySelector(".api-config-template");
+  const headersInput = card.querySelector(".api-config-headers");
   const enabledInput = card.querySelector(".config-enabled");
   const isAdvanced = card.classList.contains("is-advanced");
 
@@ -968,6 +981,7 @@ function readApiConfigFromCard(card) {
     model: (modelInput?.value || "").trim(),
     apiUrl: (urlInput?.value || "").trim(),
     requestTemplate: (templateInput?.value || "").trim(),
+    requestHeadersTemplate: (headersInput?.value || "").trim(),
     advanced: isAdvanced,
     enabled: enabledInput ? enabledInput.checked : true
   };
@@ -1070,16 +1084,33 @@ function buildApiConfigCard(config) {
     "{",
     "  \"stream\": true,",
     "  \"messages\": [",
-    "    { \"role\": \"system\", \"content\": \"SYSTEM_PROMPT_GOES_HERE\" },",
-    "    { \"role\": \"user\", \"content\": \"PROMPT_GOES_HERE\" }",
+    "    { \"role\": \"system\", \"content\": \"<SYSTEM_PROMPT_GOES_HERE>\" },",
+    "    { \"role\": \"user\", \"content\": \"<PROMPT_GOES_HERE>\" }",
     "  ],",
-    "  \"api_key\": \"API_KEY_GOES_HERE\"",
+    "  \"api_key\": \"<API_KEY_GOES_HERE>\"",
     "}"
   ].join("\n");
   templateInput.value = config.requestTemplate || "";
   templateInput.className = "api-config-template";
   templateField.appendChild(templateLabel);
   templateField.appendChild(templateInput);
+
+  const headersField = document.createElement("div");
+  headersField.className = "field advanced-only";
+  const headersLabel = document.createElement("label");
+  headersLabel.textContent = "Request headers (JSON)";
+  const headersInput = document.createElement("textarea");
+  headersInput.rows = 5;
+  headersInput.placeholder = [
+    "{",
+    "  \"Content-Type\": \"application/json\",",
+    "  \"Authorization\": \"Bearer <API_KEY_GOES_HERE>\"",
+    "}"
+  ].join("\n");
+  headersInput.value = config.requestHeadersTemplate || "";
+  headersInput.className = "api-config-headers";
+  headersField.appendChild(headersLabel);
+  headersField.appendChild(headersInput);
 
   const actions = document.createElement("div");
   actions.className = "api-config-actions";
@@ -1171,6 +1202,7 @@ function buildApiConfigCard(config) {
       model: DEFAULT_MODEL,
       apiUrl: "",
       requestTemplate: "",
+      requestHeadersTemplate: "",
       advanced: false
     });
     card.insertAdjacentElement("afterend", newCard);
@@ -1193,10 +1225,10 @@ function buildApiConfigCard(config) {
       `  \"model\": \"${modelInput.value || DEFAULT_MODEL}\",`,
       "  \"stream\": true,",
       "  \"messages\": [",
-      "    { \"role\": \"system\", \"content\": \"SYSTEM_PROMPT_GOES_HERE\" },",
-      "    { \"role\": \"user\", \"content\": \"PROMPT_GOES_HERE\" }",
+      "    { \"role\": \"system\", \"content\": \"<SYSTEM_PROMPT_GOES_HERE>\" },",
+      "    { \"role\": \"user\", \"content\": \"<PROMPT_GOES_HERE>\" }",
       "  ],",
-      "  \"api_key\": \"API_KEY_GOES_HERE\"",
+      "  \"api_key\": \"<API_KEY_GOES_HERE>\"",
       "}"
     ].join("\n");
     setApiConfigAdvanced(card, true);
@@ -1211,6 +1243,7 @@ function buildApiConfigCard(config) {
     modelInput.value = DEFAULT_MODEL;
     urlInput.value = "";
     templateInput.value = "";
+    headersInput.value = "";
     setApiConfigAdvanced(card, false);
     updateEnvApiOptions();
   });
@@ -1230,6 +1263,7 @@ function buildApiConfigCard(config) {
   modelInput.addEventListener("input", updateSelect);
   urlInput.addEventListener("input", updateSelect);
   templateInput.addEventListener("input", updateSelect);
+  headersInput.addEventListener("input", updateSelect);
 
   rightActions.appendChild(moveTopBtn);
   rightActions.appendChild(moveUpBtn);
@@ -1248,6 +1282,7 @@ function buildApiConfigCard(config) {
   body.appendChild(baseField);
   body.appendChild(urlField);
   body.appendChild(templateField);
+  body.appendChild(headersField);
   summaryRight.appendChild(actions);
 
   setApiConfigAdvanced(card, isAdvanced);
@@ -5583,6 +5618,13 @@ function updateSidebarErrors() {
       if (!isValidTemplateJson(defaultApiConfig.requestTemplate || "")) {
         errors.push("Default API config request template is invalid JSON.");
       }
+      if (
+        !isValidOptionalTemplateJson(
+          defaultApiConfig.requestHeadersTemplate || ""
+        )
+      ) {
+        errors.push("Default API config request headers are invalid JSON.");
+      }
     } else {
       if (!defaultApiConfig.apiBaseUrl) {
         errors.push("Default API config is missing a base URL.");
@@ -5887,6 +5929,7 @@ async function loadSettings() {
       apiKeyId: resolvedActiveId || resolvedKeys[0]?.id || "",
       apiUrl: "",
       requestTemplate: "",
+      requestHeadersTemplate: "",
       advanced: false,
       enabled: true
     };
@@ -5903,6 +5946,7 @@ async function loadSettings() {
       apiKeyId: config.apiKeyId || fallbackKeyId,
       apiUrl: config.apiUrl || "",
       requestTemplate: config.requestTemplate || "",
+      requestHeadersTemplate: config.requestHeadersTemplate || "",
       advanced: Boolean(config.advanced),
       enabled: config.enabled !== false
     }));
@@ -6314,6 +6358,7 @@ addApiConfigBtn.addEventListener("click", () => {
     model: DEFAULT_MODEL,
     apiUrl: "",
     requestTemplate: "",
+    requestHeadersTemplate: "",
     advanced: false
   });
   const first = apiConfigsContainer.firstElementChild;
